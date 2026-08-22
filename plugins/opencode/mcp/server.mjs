@@ -35,7 +35,7 @@ async function getConnection(cwd) {
   let conn = connections.get(url);
   if (!conn) {
     const client = createClient(url, { directory: cwd });
-    const watcher = createPermissionWatcher({ client, config });
+    const watcher = createPermissionWatcher({ client, config: () => loadConfig() });
     watcher.start();
     conn = { client, watcher };
     connections.set(url, conn);
@@ -266,8 +266,10 @@ async function toolAbort(args) {
 const TOOLS = [
   {
     name: "models",
+    title: "Model catalog",
     description:
       "List delegateable opencode models merged with the live catalog: tiers, variants, costs, effort policy, budget and a selection hint.",
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
       properties: {
@@ -277,8 +279,10 @@ const TOOLS = [
   },
   {
     name: "delegate",
+    title: "Delegate task",
     description:
       "Delegate a task to an opencode model asynchronously. Returns immediately with sessionID/jobId. Use wait to observe progress.",
+    annotations: { openWorldHint: true },
     inputSchema: {
       type: "object",
       required: ["task"],
@@ -294,8 +298,10 @@ const TOOLS = [
   },
   {
     name: "wait",
+    title: "Wait for session",
     description:
       "Poll a delegated session until it goes idle, needs input (pending permission), or the timeout expires.",
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
       required: ["sessionID"],
@@ -308,7 +314,9 @@ const TOOLS = [
   },
   {
     name: "status",
+    title: "Session snapshot",
     description: "Non-blocking snapshot of a delegated session: state, todos, diff, last message. Failing sub-endpoints return null instead of erroring.",
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
       required: ["sessionID"],
@@ -320,6 +328,7 @@ const TOOLS = [
   },
   {
     name: "respond",
+    title: "Answer permission",
     description: "Answer a pending permission request: once, always or reject.",
     inputSchema: {
       type: "object",
@@ -334,7 +343,9 @@ const TOOLS = [
   },
   {
     name: "abort",
+    title: "Abort session",
     description: "Abort a running delegated session.",
+    annotations: { destructiveHint: true, idempotentHint: true },
     inputSchema: {
       type: "object",
       required: ["sessionID"],

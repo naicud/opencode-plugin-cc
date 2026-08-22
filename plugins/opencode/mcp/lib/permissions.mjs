@@ -50,13 +50,23 @@ export function classifyPermission(perm, rules = {}) {
  * Create an SSE permission watcher bound to a client.
  * @param {object} opts
  * @param {object} opts.client - OpenCode client (subscribeEvents + respondPermission)
- * @param {object} opts.config - models.json content (uses config.permissions)
+ * @param {object|(() => object)} opts.config - models.json content, or a getter
+ *   re-read on each event so config edits apply without restarting the MCP server
  * @param {(info: { id: string, sessionID: string, action: string }) => void} [opts.onAuto]
  * @returns {{ start: () => void, stop: () => Promise<void>, pending: (sessionID?: string) => object[] }}
  */
 export function createPermissionWatcher(opts) {
-  const { client, config, onAuto } = opts;
-  const rules = config.permissions ?? {};
+  const { client, config: configOrGetter, onAuto } = opts;
+  const resolveRules =
+    typeof configOrGetter === "function"
+      ? () => {
+          try {
+            return configOrGetter()?.permissions ?? {};
+          } catch {
+            return {}; // unreadable config must not kill the watcher
+          }
+        }
+      : () => configOrGetter?.permissions ?? {};
   /** @type {Map<string, object>} */
   const pending = new Map();
   let running = false;
@@ -67,7 +77,7 @@ export function createPermissionWatcher(opts) {
     const perm = event.properties ?? event;
     if (!perm?.id || !perm?.sessionID) return;
 
-    const verdict = classifyPermission(perm, rules);
+    const verdict = classifyPermission(perm, resolveRules());
     if (verdict) {
       pending.delete(perm.id);
       onAuto?.({ id: perm.id, sessionID: perm.sessionID, action: verdict });
