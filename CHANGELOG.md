@@ -1,0 +1,47 @@
+# Changelog
+
+All notable changes to this project are documented here.
+Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [1.1.0] - 2026-08-23
+
+### Added
+- **Multi-account quota routing**: configure multiple OpenCode accounts in `config/models.json`
+  (`accounts.names`, `strategy: fixed|round-robin`, `default`); credentials via
+  `OPENCODE_DELEGATE_KEY_<ACCOUNT>` env vars; per-account servers injected with
+  `OPENCODE_AUTH_CONTENT`; distinct derived port per workspace+account; account persisted in job
+  records and resolved automatically by `wait`/`status`/`respond`/`abort`.
+- **Error escalation hints**: when a delegated task fails with a retryable error (quota, rate
+  limit, provider 5xx), `wait` returns an `escalation` object suggesting the next configured tier;
+  the PostToolUse hook turns it into concrete re-delegate guidance.
+- **PostToolUse delegation hook** (`scripts/delegation-context-hook.mjs`): injects completion,
+  permission-blocked, timeout, and escalation context into Claude's session after every
+  `wait`/`status` call.
+- **GitHub Actions CI** (`.github/workflows/test.yml`): unit suite + full syntax check on Node 20
+  and 22.
+- **Multi-account E2E stress** (`npm run test:multiaccount`): round-robin rotation across two named
+  credentials, per-account server isolation, explicit picks, unknown-account rejection, state
+  persistence.
+- MCP tool descriptors now carry `title` and standard annotations (`readOnlyHint`,
+  `destructiveHint`, …).
+- Permission rules hot-reload: the watcher re-reads config on every event (no MCP restart needed).
+- `.mcp.json` passes `OPENCODE_SERVER_PASSWORD`/`OPENCODE_SERVER_USERNAME` through for
+  authenticated opencode serve instances.
+- `delegate` creates titled sessions (task-derived) visible in the OpenCode UI; `wait` responses
+  include `jobId` tie-back, `account`, and a todo progress summary.
+
+### Fixed
+- `wait` race right after `prompt_async`: no longer reports idle before the assistant reply exists.
+- README install/uninstall URLs point at this fork (`naicud/opencode-plugin-cc`).
+- License metadata corrected to Apache-2.0 (matches LICENSE file).
+- `formatHint` uses the merged live catalog and never recommends unavailable models.
+
+### Changed
+- Curated catalog reduced to four models used at max effort by default:
+  x-preview-f-free (tier 0), deepseek-v4-flash (1), deepseek-v4-pro (2), kimi-k3 (3);
+  strict variant chains — no silent downgrade.
+
+## [1.0.0] - initial release
+
+- `/opencode:*` commands, rescue/delegate agents, skills, hooks, and the six-tool delegation MCP
+  server over stdio with zero npm dependencies.
