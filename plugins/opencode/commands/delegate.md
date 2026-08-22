@@ -1,6 +1,6 @@
 ---
 description: Delegate a task to an OpenCode model with tier/effort control and supervise it
-argument-hint: '[--model <id>] [--tier N] [--effort max|high|off] <task>'
+argument-hint: '[--model <id>] [--tier N] [--effort max|high|off] [--account <name|auto>] <task>'
 allowed-tools: Bash(node:*), mcp__plugin_opencode_oc__models, mcp__plugin_opencode_oc__delegate, mcp__plugin_opencode_oc__wait, mcp__plugin_opencode_oc__status, mcp__plugin_opencode_oc__respond, mcp__plugin_opencode_oc__abort
 ---
 
@@ -11,6 +11,7 @@ Parse routing flags from $ARGUMENTS and strip them from the task text:
 - `--model <id>` → explicit model id for the `delegate` call
 - `--tier N` → tier selection (0–3) when no explicit model
 - `--effort max|high|off` → effort request
+- `--account <name|auto>` → OpenCode account for quota routing (default `auto`: round-robin/fixed per config; only meaningful when accounts are configured)
 
 Procedure:
 

@@ -1,5 +1,10 @@
 # OpenCode plugin for Claude Code
 
+[![tests](https://github.com/naicud/opencode-plugin-cc/actions/workflows/test.yml/badge.svg)](https://github.com/naicud/opencode-plugin-cc/actions/workflows/test.yml)
+![node](https://img.shields.io/badge/node-18.18%2B-brightgreen)
+![license](https://img.shields.io/badge/license-Apache--2.0-blue)
+![npm deps](https://img.shields.io/badge/npm%20deps-0-success)
+
 > **Tribute**: This project is inspired by and pays homage to
 > [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) by OpenAI.
 > The plugin architecture, command structure, and design patterns are derived from

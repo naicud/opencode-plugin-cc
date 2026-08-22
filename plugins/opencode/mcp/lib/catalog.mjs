@@ -14,8 +14,8 @@ export const DEFAULT_CONFIG_PATH = path.join(__dirname, "..", "..", "config", "m
 
 const CONFIG_CACHE_TTL_MS = 10 * 60 * 1000; // RF-8
 
-/** @type {{ path: string, mtimeMs: number, loadedAt: number, config: object }|null} */
-let cache = null;
+/** @type {Map<string, { mtimeMs: number, loadedAt: number, config: object }>} */
+const caches = new Map();
 
 /**
  * Extract line/column from a JSON syntax error position.
@@ -166,13 +166,13 @@ export function loadConfig(configPath = process.env.OC_MODELS_CONFIG ?? DEFAULT_
     throw Object.assign(new Error(`Catalog config not found: ${configPath}`), { file: configPath });
   }
 
+  const cached = caches.get(configPath);
   if (
-    cache &&
-    cache.path === configPath &&
-    cache.mtimeMs === stat.mtimeMs &&
-    Date.now() - cache.loadedAt < CONFIG_CACHE_TTL_MS
+    cached &&
+    cached.mtimeMs === stat.mtimeMs &&
+    Date.now() - cached.loadedAt < CONFIG_CACHE_TTL_MS
   ) {
-    return cache.config;
+    return cached.config;
   }
 
   let text;
@@ -195,13 +195,13 @@ export function loadConfig(configPath = process.env.OC_MODELS_CONFIG ?? DEFAULT_
     });
   }
 
-  cache = { path: configPath, mtimeMs: stat.mtimeMs, loadedAt: Date.now(), config };
+  caches.set(configPath, { mtimeMs: stat.mtimeMs, loadedAt: Date.now(), config });
   return config;
 }
 
-/** Test hook: drop the memoized config. */
+/** Test hook: drop the memoized config(s). */
 export function resetCatalogCache() {
-  cache = null;
+  caches.clear();
 }
 
 /**
@@ -289,13 +289,19 @@ export async function getCatalog(client, configPath) {
 
 /**
  * Human-readable hint describing tiers and budget for the `models` tool.
+ * Prefers the merged catalog when provided so unavailable models are never
+ * recommended and live-only tiers surface correctly.
  * @param {object} config
+ * @param {object[]} [models] - merged catalog entries (from getCatalog)
  * @returns {string}
  */
-export function formatHint(config) {
+export function formatHint(config, models) {
+  const source = Array.isArray(models) ? models : (config.models ?? []);
   const byTier = {};
-  for (const m of config.models ?? []) {
-    const t = String(m.tier ?? "?");
+  for (const m of source) {
+    if (m.tier == null) continue;
+    if (m.available === false) continue;
+    const t = String(m.tier);
     (byTier[t] ??= []).push(m.id);
   }
   const tiers = Object.keys(byTier)

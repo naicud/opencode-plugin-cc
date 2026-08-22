@@ -93,7 +93,7 @@ async function toolModels(args) {
     budget: config.budget,
     accounts: listAccounts(config),
     offPeakWindowsUtc: ["01:00-04:00", "06:00-10:00"],
-    hint: formatHint(config),
+    hint: formatHint(config, catalog.models),
   };
 }
 

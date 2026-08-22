@@ -9,6 +9,7 @@ import {
   mergeCatalogs,
   isOffPeakNow,
   locateJsonError,
+  formatHint,
 } from "../plugins/opencode/mcp/lib/catalog.mjs";
 
 let tmpDir;
@@ -73,6 +74,57 @@ describe("catalog", () => {
   it("missing file yields error with file field", () => {
     assert.throws(() => loadConfig(path.join(tmpDir, "nope.json")), /not found/);
   });
+
+  it("loadConfig caches multiple config paths independently (multi-slot)", () => {
+    const otherPath = path.join(tmpDir, "other.json");
+    fs.writeFileSync(
+      otherPath,
+      JSON.stringify({ ...baseConfig, provider: "other" }, null, 2),
+      "utf8"
+    );
+    const a = loadConfig(configPath);
+    const b = loadConfig(otherPath);
+    assert.equal(a.provider, "opencode");
+    assert.equal(b.provider, "other");
+    // Alternating hits must not thrash: both stay cached
+    assert.equal(loadConfig(configPath).provider, "opencode");
+    assert.equal(loadConfig(otherPath).provider, "other");
+  });
+
+  describe("formatHint", () => {
+    it("uses merged models when provided and skips unavailable/unclassified", () => {
+      const { models } = mergeCatalogs(baseConfig, {
+        "glm-5.2": liveModels()["glm-5.2"],
+        "brand-new-model": liveModels()["brand-new-model"],
+      });
+      const hint = formatHint(baseConfig, models);
+      assert.match(hint, /tier 2: glm-5\.2/);
+      assert.doesNotMatch(hint, /kimi-k3/); // available:false dropped
+      assert.doesNotMatch(hint, /brand-new-model/); // tier null skipped
+    });
+
+    it("falls back to file catalog when no models array passed", () => {
+      const hint = formatHint(baseConfig);
+      assert.match(hint, /glm-5\.2/);
+      assert.match(hint, /kimi-k3/);
+      assert.match(hint, /In dubbio scendi di un tier/);
+    });
+  });
+
+  function liveModels() {
+    return {
+      "glm-5.2": {
+        id: "glm-5.2",
+        variants: { max: {}, high: {} },
+        cost: { input: 1.4, output: 4.4, cache: 0.7 },
+      },
+      "brand-new-model": {
+        id: "brand-new-model",
+        variants: {},
+        cost: { input: 0.5, output: 1 },
+      },
+    };
+  }
 
   describe("mergeCatalogs", () => {
     const liveModels = {
