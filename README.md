@@ -35,7 +35,7 @@ they already have.
 Inside Claude Code, run:
 
 ```
-! curl -fsSL https://raw.githubusercontent.com/tasict/opencode-plugin-cc/main/install.sh | bash
+! curl -fsSL https://raw.githubusercontent.com/naicud/opencode-plugin-cc/main/install.sh | bash
 ```
 
 Then reload the plugin:
@@ -77,7 +77,7 @@ To check your configured providers:
 ### Uninstall
 
 ```
-/plugin uninstall opencode@tasict-opencode-plugin-cc
+/plugin uninstall opencode@naicud-opencode-plugin-cc
 /reload-plugins
 ```
 
@@ -180,7 +180,7 @@ When enabled via `/opencode:setup --enable-review-gate`, a Stop hook runs a targ
 <details>
 <summary><strong>Plugin not loading after install (0 plugins)</strong></summary>
 
-1. Re-run the installer: `! curl -fsSL https://raw.githubusercontent.com/tasict/opencode-plugin-cc/main/install.sh | bash`
+1. Re-run the installer: `! curl -fsSL https://raw.githubusercontent.com/naicud/opencode-plugin-cc/main/install.sh | bash`
 2. Run `/reload-plugins` again.
 3. If still failing, restart Claude Code.
 </details>

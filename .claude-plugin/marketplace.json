@@ -1,6 +1,6 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "tasict-opencode-plugin-cc",
+  "name": "naicud-opencode-plugin-cc",
   "version": "1.0.0",
   "description": "OpenCode plugins to use in Claude Code for delegation and code review.",
   "owner": {
