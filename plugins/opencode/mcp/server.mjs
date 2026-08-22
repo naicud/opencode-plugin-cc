@@ -15,6 +15,7 @@ import {
 import { loadConfig, getCatalog, formatHint } from "./lib/catalog.mjs";
 import { resolveSelection, buildModelSelector } from "./lib/resolve.mjs";
 import { createPermissionWatcher } from "./lib/permissions.mjs";
+import { pickAccount, buildAuthContent, envKeyName, listAccounts } from "./lib/accounts.mjs";
 import { createJobRecord } from "../scripts/lib/tracked-jobs.mjs";
 import { loadState, upsertJob } from "../scripts/lib/state.mjs";
 
@@ -26,25 +27,53 @@ const DEFAULT_WAIT_TIMEOUT_SEC = 600;
 const connections = new Map();
 
 /**
- * Get (or create) a client + permission watcher pair for a workspace.
+ * Get (or create) a client + permission watcher pair for a workspace/account.
+ * Per-account servers coexist on distinct derived ports; each is spawned with
+ * its own OPENCODE_AUTH_CONTENT credential set.
  * @param {string} cwd
+ * @param {string|null} account - resolved account name or null (legacy path)
  */
-async function getConnection(cwd) {
+async function getConnection(cwd, account = null) {
   const config = loadConfig();
-  const { url } = await ensureServer({ cwd, permissions: config.permissions?.spawn });
+  let authContent;
+  if (account) {
+    const key = process.env[envKeyName(account)];
+    authContent = buildAuthContent(config.provider, key ?? "");
+  }
+  const { url } = await ensureServer({
+    cwd,
+    account,
+    permissions: config.permissions?.spawn,
+    ...(authContent ? { authContent } : {}),
+  });
   let conn = connections.get(url);
   if (!conn) {
     const client = createClient(url, { directory: cwd });
     const watcher = createPermissionWatcher({ client, config: () => loadConfig() });
     watcher.start();
-    conn = { client, watcher };
+    conn = { client, watcher, account };
     connections.set(url, conn);
   }
   return conn;
 }
 
-function getClient(cwd) {
-  return getConnection(cwd).then((c) => c.client);
+function getClient(cwd, account = null) {
+  return getConnection(cwd, account).then((c) => c.client);
+}
+
+/**
+ * Resolve the account a session belongs to from its job record.
+ * @param {string} cwd
+ * @param {string} sessionID
+ * @returns {string|null}
+ */
+function accountForSession(cwd, sessionID) {
+  try {
+    const job = (loadState(cwd).jobs ?? []).find((j) => j.sessionID === sessionID);
+    return job?.account ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /* ---------------------------------- tools --------------------------------- */
@@ -62,6 +91,7 @@ async function toolModels(args) {
     effortPolicy: config.effortPolicy,
     variantPreference: config.variantPreference,
     budget: config.budget,
+    accounts: listAccounts(config),
     offPeakWindowsUtc: ["01:00-04:00", "06:00-10:00"],
     hint: formatHint(config),
   };
@@ -80,8 +110,15 @@ async function toolDelegate(args) {
   }
   const config = loadConfig();
 
+  // Resolve the account BEFORE spawning: fail fast on missing credentials.
+  let account = null;
+  const accountsBlock = config.accounts;
+  if (accountsBlock?.names?.length > 0) {
+    account = pickAccount(config, cwd, args.account);
+  }
+
   // Resolve BEFORE spawning anything so bad requests fail fast and cheaply.
-  const catalogModels = (await getCatalog(await getClient(cwd))).models;
+  const catalogModels = (await getCatalog(await getClient(cwd, account))).models;
   const selection = resolveSelection(
     { modelId: args.model, tier: args.tier, effort: args.effort },
     catalogModels,
@@ -89,9 +126,11 @@ async function toolDelegate(args) {
   );
   const selector = buildModelSelector(config.provider, selection.model.id, selection.variant);
 
-  const { client } = await getConnection(cwd);
+  const { client } = await getConnection(cwd, account);
   const agent = args.agent ?? config.defaults?.agent ?? "build";
-  const session = await client.createSession({});
+  const session = await client.createSession({
+    title: args.task.replace(/\s+/g, " ").slice(0, 80),
+  });
   const promptText = `${renderContract(config.contract, cwd)}\n---\n\n${args.task}`;
 
   await client.sendPromptAsync(session.id, promptText, {
@@ -106,6 +145,7 @@ async function toolDelegate(args) {
     variant: selection.variant ?? null,
     effortApplied: selection.effortApplied,
     tier: selection.model.tier ?? null,
+    account,
     directory: cwd,
   });
   upsertJob(cwd, { id: job.id, status: "running", phase: "delegated" });
@@ -113,6 +153,7 @@ async function toolDelegate(args) {
   return {
     sessionID: session.id,
     jobId: job.id,
+    account,
     modelRef: `${config.provider}/${selection.model.id}`,
     variant: selection.variant ?? null,
     effortApplied: selection.effortApplied,
@@ -152,19 +193,42 @@ function markJobBySession(cwd, sessionID, patchFn) {
   } catch {}
 }
 
+/**
+ * Compact todo progress summary for wait responses.
+ * @param {object} client
+ * @param {string} sessionId
+ * @returns {Promise<object|null>}
+ */
+async function summarizeTodos(client, sessionId) {
+  try {
+    const todos = await client.getTodo(sessionId);
+    if (!Array.isArray(todos) || todos.length === 0) return null;
+    const counts = {};
+    for (const t of todos) counts[t.status] = (counts[t.status] ?? 0) + 1;
+    const current = todos.find((t) => t.status === "in_progress") ?? null;
+    return { counts, current: current?.content ?? null, total: todos.length };
+  } catch {
+    return null;
+  }
+}
+
 async function toolWait(args) {
   const cwd = args.cwd ?? process.cwd();
-  const { client, watcher } = await getConnection(cwd);
+  const account = accountForSession(cwd, args.sessionID);
+  const { client, watcher } = await getConnection(cwd, account);
   const deadline = Date.now() + (args.timeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC) * 1000;
+  const job = (loadState(cwd).jobs ?? []).find((j) => j.sessionID === args.sessionID);
 
   for (;;) {
     // Pending permissions for this session surface as needsInput (RF-19)
     const pending = watcher.pendingList(args.sessionID);
-    if (pending.length > 0) {
-      return {
-        status: "needsInput",
-        sessionID: args.sessionID,
-        permissions: pending.map((p) => ({
+      if (pending.length > 0) {
+        return {
+          status: "needsInput",
+          sessionID: args.sessionID,
+          jobId: job?.id ?? null,
+          account,
+          permissions: pending.map((p) => ({
           id: p.id,
           permission: p.permission,
           patterns: p.patterns ?? [],
@@ -201,11 +265,14 @@ async function toolWait(args) {
       return {
         status: "idle",
         sessionID: args.sessionID,
+        jobId: job?.id ?? null,
+        account,
         state,
         error: outcome?.info?.error ?? null,
         cost: outcome?.info?.cost ?? null,
         tokens: outcome?.info?.tokens ?? null,
         variant: outcome?.info?.variant ?? null,
+        todos: await summarizeTodos(client, args.sessionID),
         response: outcome?.text ?? "",
       };
     }
@@ -219,7 +286,7 @@ async function toolWait(args) {
 
 async function toolStatus(args) {
   const cwd = args.cwd ?? process.cwd();
-  const client = await getClient(cwd);
+  const client = await getClient(cwd, accountForSession(cwd, args.sessionID));
   // RF-11: any failing sub-endpoint becomes null, the tool itself must not fail.
   const [statuses, todo, diff, messages] = await Promise.all([
     client.getSessionStatus().catch(() => null),
@@ -251,15 +318,19 @@ async function toolStatus(args) {
 
 async function toolRespond(args) {
   const cwd = args.cwd ?? process.cwd();
-  const client = await getClient(cwd);
+  const client = await getClient(cwd, accountForSession(cwd, args.sessionID));
   const ok = await client.respondPermission(args.sessionID, args.permissionID, args.response);
   return { responded: Boolean(ok), permissionID: args.permissionID, response: args.response };
 }
 
 async function toolAbort(args) {
   const cwd = args.cwd ?? process.cwd();
-  const client = await getClient(cwd);
+  const client = await getClient(cwd, accountForSession(cwd, args.sessionID));
   await client.abortSession(args.sessionID);
+  markJobBySession(cwd, args.sessionID, () => ({
+    status: "cancelled",
+    completedAt: new Date().toISOString(),
+  }));
   return { aborted: true, sessionID: args.sessionID };
 }
 
@@ -292,6 +363,7 @@ const TOOLS = [
         model: { type: "string", description: "Explicit model id (overrides tier)" },
         tier: { type: "number", description: "Tier 0-3 when no explicit model" },
         effort: { type: "string", enum: ["off", "high", "max"], description: "Effort request; default from effortPolicy" },
+        account: { type: "string", description: 'OpenCode account for quota routing ("auto" default round-robin)' },
         agent: { type: "string", description: "OpenCode agent (default build)" },
       },
     },

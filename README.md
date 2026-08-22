@@ -140,6 +140,18 @@ npm run models:sync [-- --live]   # refresh config/models.json from the live cat
 
 A PostToolUse hook (`scripts/delegation-context-hook.mjs`) watches `wait`/`status` MCP calls and injects an `additionalContext` note into Claude's context when a delegated task finishes, blocks on a pending permission (`needsInput`), or times out — so the supervisor notices without polling manually.
 
+### Multi-account quota routing
+
+Multiple OpenCode accounts can be pooled to amplify quotas. Accounts are declared in `config/models.json` (names only — never secrets):
+
+```jsonc
+"accounts": { "names": ["work", "personal"], "strategy": "round-robin", "default": "work" }
+```
+
+Credentials come from the environment, one variable per account: `OPENCODE_DELEGATE_KEY_WORK`, `OPENCODE_DELEGATE_KEY_PERSONAL` (`OPENCODE_DELEGATE_KEY_<ACCOUNT>` uppercased, non-alphanumerics → `_`). At delegate time the plugin spawns one server per account, injecting the key via `OPENCODE_AUTH_CONTENT` (verified against upstream `auth/index.ts`: env content wins over `~/.local/share/opencode/auth.json`), and derives a distinct port per workspace+account so servers coexist.
+
+Routing: `delegate` accepts `account: "auto"` (default) or an explicit name. `"auto"` follows `strategy` — `fixed` pins to `default`; `round-robin` least-recently-used across credentialed accounts (rotation state persisted per workspace). The chosen account is stored in the job record; `wait`/`status`/`respond`/`abort` resolve it automatically from the session ID. With no `accounts` block the legacy single-account path is used untouched.
+
 ### Cleanup
 
 Delegate servers persist between calls. To kill them all:

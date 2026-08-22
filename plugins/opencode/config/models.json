@@ -1,6 +1,11 @@
 {
   "version": 2,
   "provider": "opencode",
+  "accounts": {
+    "names": [],
+    "strategy": "round-robin",
+    "default": null
+  },
   "syncedAt": "2026-08-22T17:01:46.118Z",
   "defaults": {
     "tier": 0,

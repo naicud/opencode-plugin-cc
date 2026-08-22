@@ -17,12 +17,42 @@ const SERVER_START_TIMEOUT = 30_000;
 /**
  * Derive a deterministic port for a workspace (CA-16): avoids every delegate
  * colliding on the default port while keeping the port stable across calls.
+ * An optional account name yields a DIFFERENT port so one server per
+ * credential set can coexist for the same workspace.
  * @param {string} cwd
+ * @param {string} [account]
  * @returns {number}
  */
-export function derivePort(cwd) {
-  const hash = crypto.createHash("sha256").update(cwd).digest("hex");
+export function derivePort(cwd, account) {
+  const seed = account ? `${cwd}\u0000${account}` : cwd;
+  const hash = crypto.createHash("sha256").update(seed).digest("hex");
   return DERIVED_PORT_BASE + (parseInt(hash.slice(0, 12), 16) % DERIVED_PORT_SPAN);
+}
+
+/**
+ * Validate an OPENCODE_AUTH_CONTENT payload before spawn (findings P8 class:
+ * malformed auth/config env vars start a server that answers healthy but
+ * fails every real call).
+ * @param {string} authContent - JSON string Record<providerId,{type:"api",key}>
+ */
+export function validateAuthContent(authContent) {
+  let parsed;
+  try {
+    parsed = JSON.parse(authContent);
+  } catch {
+    throw new Error("OPENCODE_AUTH_CONTENT is not valid JSON");
+  }
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("OPENCODE_AUTH_CONTENT must be a JSON object keyed by provider id");
+  }
+  for (const [provider, info] of Object.entries(parsed)) {
+    if (!info || typeof info !== "object" || !["api", "oauth", "wellknown"].includes(info.type)) {
+      throw new Error(`OPENCODE_AUTH_CONTENT "${provider}" entry missing valid type`);
+    }
+    if (typeof info.key !== "string" || info.key.length === 0) {
+      throw new Error(`OPENCODE_AUTH_CONTENT "${provider}" entry missing key`);
+    }
+  }
 }
 
 /**
@@ -80,13 +110,16 @@ export async function isServerRunning(host = DEFAULT_HOST, port = DEFAULT_PORT) 
 
 /**
  * Start the OpenCode server if not already running.
- * The port is derived from the workspace unless opts.port is set; ports held by
- * foreign processes are skipped incrementally. stdout/stderr go to
- * <stateRoot>/servers/serve-<port>.log so start failures are diagnosable (CA-15).
+ * The port is derived from the workspace (and account, when given) unless
+ * opts.port is set; ports held by foreign processes are skipped incrementally.
+ * stdout/stderr go to <stateRoot>/servers/serve-<port>.log so start failures
+ * are diagnosable (CA-15).
  * @param {object} opts
  * @param {string} opts.cwd - workspace directory (drives port derivation)
  * @param {number} [opts.port] - explicit override
  * @param {string} [opts.host]
+ * @param {string|null} [opts.account] - account name (participates in port derivation)
+ * @param {string} [opts.authContent] - OPENCODE_AUTH_CONTENT payload (validated before spawn)
  * @param {object} [opts.permissions] - OPENCODE_PERMISSION payload (spawn-time policy)
  * @param {string} [opts.configPath] - OPENCODE_CONFIG file path
  * @returns {Promise<{ url: string, pid?: number, alreadyRunning: boolean }>}
@@ -94,7 +127,7 @@ export async function isServerRunning(host = DEFAULT_HOST, port = DEFAULT_PORT) 
 export async function ensureServer(opts = {}) {
   const host = opts.host ?? DEFAULT_HOST;
   const cwd = opts.cwd ?? process.cwd();
-  const firstPort = opts.port ?? derivePort(cwd);
+  const firstPort = opts.port ?? derivePort(cwd, opts.account ?? null);
 
   let port = firstPort;
   for (; port < firstPort + 10; port += 1) {
@@ -111,6 +144,12 @@ export async function ensureServer(opts = {}) {
     permissionEnv = JSON.stringify(opts.permissions);
   }
 
+  let authContentEnv;
+  if (opts.authContent != null) {
+    validateAuthContent(opts.authContent);
+    authContentEnv = opts.authContent;
+  }
+
   // Start the server with logs redirected to disk instead of dropped pipes
   const logDir = path.join(stateRoot(cwd), "servers");
   fs.mkdirSync(logDir, { recursive: true });
@@ -120,6 +159,7 @@ export async function ensureServer(opts = {}) {
   const env = { ...process.env };
   if (permissionEnv != null) env.OPENCODE_PERMISSION = permissionEnv;
   if (opts.configPath != null) env.OPENCODE_CONFIG = opts.configPath;
+  if (authContentEnv != null) env.OPENCODE_AUTH_CONTENT = authContentEnv;
 
   const proc = spawn(
     "opencode",
