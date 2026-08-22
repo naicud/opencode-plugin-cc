@@ -1,0 +1,92 @@
+{
+  "version": 2,
+  "provider": "opencode",
+  "syncedAt": "2026-08-22T00:00:00.000Z",
+  "defaults": {
+    "tier": 0,
+    "timeoutSec": 900,
+    "agent": "build"
+  },
+  "effortPolicy": {
+    "mode": "max",
+    "perTier": {
+      "0": "max",
+      "1": "max",
+      "2": "max",
+      "3": "max"
+    }
+  },
+  "variantPreference": {
+    "max": ["max"],
+    "high": ["high"],
+    "off": []
+  },
+  "models": [
+    {
+      "id": "x-preview-f-free",
+      "tier": 0,
+      "use": "default workhorse; free ox-alpha model, full coding capability",
+      "default": true,
+      "variants": ["low", "high", "max"],
+      "cost": { "input": 0, "output": 0 }
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "tier": 1,
+      "use": "cheap paid fallback; fastest max-effort option",
+      "variants": ["low", "high", "max"],
+      "cost": { "input": 0.14, "output": 0.28 }
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "tier": 2,
+      "use": "hard refactors and debugging at max effort",
+      "variants": ["high", "max"],
+      "cost": { "input": 1.74, "output": 3.84 }
+    },
+    {
+      "id": "kimi-k3",
+      "tier": 3,
+      "use": "hardest problems only; premium max-effort reasoning",
+      "variants": ["max"],
+      "cost": { "input": 3, "output": 15 }
+    }
+  ],
+  "excluded": [
+    {
+      "id": "muse-spark-1.2-contributor-free",
+      "reason": "Prompt e completion usati per addestrare modelli futuri. Vietato su codice di lavoro."
+    }
+  ],
+  "permissions": {
+    "spawn": {
+      "edit": "allow",
+      "webfetch": "allow",
+      "bash": {
+        "*": "allow",
+        "git push*": "deny",
+        "git commit*": "deny",
+        "rm -rf*": "deny",
+        "sudo*": "deny"
+      }
+    },
+    "autoApprove": [
+      "^(npm|pnpm|yarn|bun) (test|run test)",
+      "^(cat|ls|rg|grep|find|head|tail|wc) ",
+      "^git (status|diff|log|show)"
+    ],
+    "autoReject": [
+      "^git (push|commit)",
+      "rm -rf",
+      "^sudo ",
+      "curl.*\\|.*(sh|bash)"
+    ]
+  },
+  "contract": "# Contratto di lavoro\n\nLavora SOLO dentro ${cwd}.\n\n## Regole operative\n- Non fare push, commit o modifiche fuori dal workspace.\n- Non toccare file elencati come fuori scope.\n- Esegui il comando di test indicato nel task prima di dichiarare completato.\n\n## Report finale\nAl termine scrivi un report in .oc-report.md con:\n- STATUS: COMPLETED | PARTIAL | BLOCKED\n- Obiettivo ripreso in una riga\n- File modificati (chiave \"files\", lista di path relativi)\n- Cosa hai fatto e perché\n- Come l'hai verificato (comando eseguito + esito)\n- Se BLOCKED: cosa ti blocca, testualmente, senza inventare dettagli\n",
+  "budget": {
+    "per5h": 12,
+    "perWeek": 30,
+    "perMonth": 60,
+    "note": "USD approssimativi sui modelli a pagamento. x-preview-f-free (tier 0) è gratuito: default per l'efficienza massima."
+  }
+}

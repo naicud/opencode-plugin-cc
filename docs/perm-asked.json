@@ -1,0 +1,1 @@
+{"id":"per_029914579001nV6UkNictwct6A","sessionID":"ses_fd66edf0fffeTjmTyyTf08d4nM","permission":"bash","patterns":["echo PERM-TEST-DONE"],"metadata":{"command":"echo PERM-TEST-DONE"},"always":["echo *"],"tool":{"messageID":"msg_029912254001P5xoLsRiB7fyWZ","callID":"call_10ed9da62b6d415793095f53"}}

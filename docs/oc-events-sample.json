@@ -1,0 +1,166 @@
+{
+ "server.connected": {
+  "id": "evt_0298e4471001x7HY1JeiIC52QH",
+  "type": "server.connected",
+  "properties": {}
+ },
+ "session.created": {
+  "id": "evt_0298e485e0019KG9DT4I8EwB43",
+  "type": "session.created",
+  "properties": {
+   "sessionID": "ses_fd671b7a2ffeBAQi0eKJNLmltb",
+   "info": {
+    "id": "ses_fd671b7a2ffeBAQi0eKJNLmltb",
+    "slug": "witty-circuit",
+    "version": "1.18.21",
+    "projectID": "global",
+    "directory": "/private/var/folders/w3/yzbyf9v15f7_kmtzw0d0h4nw0000gn/T/opencode/t0-probe",
+    "path": "",
+    "title": "New session - 2026-08-22T12:59:45.630Z",
+    "cost": 0,
+    "tokens": {
+     "input": 0,
+     "output": 0,
+     "reasoning": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    },
+    "time": {
+     "created": 1787403585630,
+     "updated": 1787403585630
+    }
+   }
+  }
+ },
+ "session.updated": {
+  "id": "evt_0298e48b9001D9PUgpeMHcmJoi",
+  "type": "session.updated",
+  "properties": {
+   "sessionID": "ses_fd671b7a2ffeBAQi0eKJNLmltb",
+   "info": {
+    "id": "ses_fd671b7a2ffeBAQi0eKJNLmltb",
+    "slug": "witty-circuit",
+    "projectID": "global",
+    "directory": "/private/var/folders/w3/yzbyf9v15f7_kmtzw0d0h4nw0000gn/T/opencode/t0-probe",
+    "path": "",
+    "title": "New session - 2026-08-22T12:59:45.630Z",
+    "agent": "build",
+    "model": {
+     "id": "mimo-v2.5-free",
+     "providerID": "opencode",
+     "variant": "default"
+    },
+    "version": "1.18.21",
+    "cost": 0,
+    "tokens": {
+     "input": 0,
+     "output": 0,
+     "reasoning": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    },
+    "time": {
+     "created": 1787403585630,
+     "updated": 1787403585720
+    }
+   }
+  }
+ },
+ "message.updated": {
+  "id": "evt_0298e48be001bS4G6ZMYaiNqqb",
+  "type": "message.updated",
+  "properties": {
+   "sessionID": "ses_fd671b7a2ffeBAQi0eKJNLmltb",
+   "info": {
+    "id": "msg_0298e48b8001LtulrFYOt8HNft",
+    "role": "user",
+    "sessionID": "ses_fd671b7a2ffeBAQi0eKJNLmltb",
+    "time": {
+     "created": 1787403585720
+    },
+    "agent": "build",
+    "model": {
+     "providerID": "opencode",
+     "modelID": "mimo-v2.5-free"
+    }
+   }
+  }
+ },
+ "message.part.updated": {
+  "id": "evt_0298e48c000157VcxjBieKMTDw",
+  "type": "message.part.updated",
+  "properties": {
+   "sessionID": "ses_fd671b7a2ffeBAQi0eKJNLmltb",
+   "part": {
+    "type": "text",
+    "text": "Reply with exactly: OK",
+    "messageID": "msg_0298e48b8001LtulrFYOt8HNft",
+    "sessionID": "ses_fd671b7a2ffeBAQi0eKJNLmltb",
+    "id": "prt_0298e48bd001QlGPgPqK4ybdKu"
+   },
+   "time": 1787403585728
+  }
+ },
+ "session.status": {
+  "id": "evt_0298e48c6001w3XkLuvf6jdsP0",
+  "type": "session.status",
+  "properties": {
+   "sessionID": "ses_fd671b7a2ffeBAQi0eKJNLmltb",
+   "status": {
+    "type": "busy"
+   }
+  }
+ },
+ "session.diff": {
+  "id": "evt_0298e494d001qyYtdJinlXY4LS",
+  "type": "session.diff",
+  "properties": {
+   "sessionID": "ses_fd671b7a2ffeBAQi0eKJNLmltb",
+   "diff": []
+  }
+ },
+ "session.error": {
+  "id": "evt_0298e4e8a001MLVUCai57L7jnK",
+  "type": "session.error",
+  "properties": {
+   "sessionID": "ses_fd671b7a2ffeBAQi0eKJNLmltb",
+   "error": {
+    "name": "APIError",
+    "data": {
+     "message": "Model is disabled",
+     "statusCode": 401,
+     "isRetryable": false,
+     "responseHeaders": {
+      "cf-placement": "remote-ORD",
+      "cf-ray": "a2f20e806f5e1fa8-SJC",
+      "connection": "keep-alive",
+      "content-length": "76",
+      "content-type": "text/plain;charset=UTF-8",
+      "date": "Sat, 22 Aug 2026 12:59:47 GMT",
+      "server": "cloudflare"
+     },
+     "responseBody": "{\"type\":\"error\",\"error\":{\"type\":\"ModelError\",\"message\":\"Model is disabled\"}}",
+     "metadata": {
+      "url": "https://opencode.ai/zen/v1/chat/completions"
+     }
+    }
+   }
+  }
+ },
+ "session.idle": {
+  "id": "evt_0298e4e8a003fUNtsYDgU0bEci",
+  "type": "session.idle",
+  "properties": {
+   "sessionID": "ses_fd671b7a2ffeBAQi0eKJNLmltb"
+  }
+ },
+ "server.heartbeat": {
+  "id": "evt_0298e6b89001EAXqGE2CdNZeV1",
+  "type": "server.heartbeat",
+  "properties": {}
+ }
+}

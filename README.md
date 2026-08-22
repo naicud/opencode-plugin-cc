@@ -16,6 +16,7 @@ they already have.
 - `/opencode:review` for a normal read-only OpenCode review
 - `/opencode:adversarial-review` for a steerable challenge review
 - `/opencode:rescue`, `/opencode:status`, `/opencode:result`, and `/opencode:cancel` to delegate work and manage background jobs
+- `/opencode:delegate` plus the `mcp__plugin_opencode_oc__*` MCP tools (`models`, `delegate`, `wait`, `status`, `respond`, `abort`) for tiered, budget-aware delegation to OpenCode Zen models
 
 ## Requirements
 
@@ -41,7 +42,7 @@ Then reload the plugin:
 You should see:
 
 ```
-Reloaded: 1 plugin · 7 skills · 6 agents · 3 hooks ...
+Reloaded: 1 plugin · 8 skills · 7 agents · 3 hooks ...
 ```
 
 Finally, verify your setup:
@@ -96,6 +97,48 @@ To check your configured providers:
 - `/opencode:result` -- Shows final output for a finished job, including OpenCode session ID for resuming.
 - `/opencode:cancel` -- Cancels an active background OpenCode job.
 - `/opencode:setup` -- Checks OpenCode install/auth, can enable/disable the review gate hook.
+- `/opencode:delegate` -- Delegates a task through the MCP delegation runtime with `--model <id>`, `--tier N` (0–3), `--effort max|high|off`. The subagent `opencode-delegate` runs the delegate/wait/verify loop for you.
+
+## Model Delegation (MCP)
+
+The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over stdio, zero npm deps) exposing six tools, reachable as `mcp__plugin_opencode_oc__models|delegate|wait|status|respond|abort`:
+
+- **models** — merged catalog (file + live `/config/providers`) with tiers, variants, real costs, effort policy and budget hint.
+- **delegate** — resolves model+variant client-side (the server accepts any variant string and silently falls back to base — see `docs/opencode-api-findings.md` P2), creates the session, fires `prompt_async` with the work contract from `config/models.json`, records a job visible to `/opencode:status`.
+- **wait** — polls every 5s; returns on idle, on pending permission (`needsInput`), or timeout.
+- **status** — non-blocking snapshot; failing sub-endpoints become `null`, never errors.
+- **respond** — answers a pending permission (`once` / `always` / `reject`). Auto-approve/auto-reject regexes live in `config/models.json`.
+- **abort** — kills a runaway session.
+
+Tiers (curated in `plugins/opencode/config/models.json`; everything else enters unclassified after `npm run models:sync`):
+
+| Tier | Model | Use |
+|---|---|---|
+| 0 | x-preview-f-free (**default**, free) | everyday work |
+| 1 | deepseek-v4-flash | fast paid fallback |
+| 2 | deepseek-v4-pro | hard refactors, debugging |
+| 3 | kimi-k3 | hardest problems only |
+
+Effort is always `max` (strict chains in `variantPreference` — no silent downgrade; if a model lacks the variant the resolver reports `effortApplied: "none"` with a reason instead).
+
+`muse-spark-1.2-contributor-free` is excluded by design (training-data clause).
+
+### Cost note
+
+Reasoning-effort variants (`high`/`max`) bill reasoning tokens as **output** tokens: a tier-3 run at `max` can cost 10× its base price. The default policy (`effortPolicy.mode: "max"`) is intentional — if diffs don't improve over a week of use, switch to `"perTier"` in `config/models.json`.
+
+### Cleanup
+
+Delegate servers persist between calls. To kill them all:
+
+```bash
+pkill -f "opencode serve"
+```
+
+### Known debt
+
+- `/opencode:rescue --model` is currently ignored (`opencode-companion.mjs` does not forward it).
+- `handleSetup`/`handleCancel` still hardcode `127.0.0.1:4096` instead of the derived per-workspace port.
 
 ## Review Gate
 
@@ -153,20 +196,31 @@ opencode-plugin-cc/
 ├── install.sh                            # One-line installer
 ├── plugins/opencode/
 │   ├── .claude-plugin/plugin.json        # Plugin metadata
+│   ├── .mcp.json                         # MCP server registration (oc)
+│   ├── config/models.json                # Curated model catalog + permissions + contract
 │   ├── agents/opencode-rescue.md         # Rescue subagent definition
-│   ├── commands/                         # 7 slash commands
+│   ├── agents/opencode-delegate.md       # Delegation supervisor subagent
+│   ├── commands/                         # 8 slash commands
 │   │   ├── review.md
 │   │   ├── adversarial-review.md
 │   │   ├── rescue.md
+│   │   ├── delegate.md
 │   │   ├── status.md
 │   │   ├── result.md
 │   │   ├── cancel.md
 │   │   └── setup.md
 │   ├── hooks/hooks.json                  # Lifecycle hooks
+│   ├── mcp/                              # Delegation MCP server (zero deps)
+│   │   ├── server.mjs                    # JSON-RPC 2.0 over stdio
+│   │   └── lib/
+│   │       ├── catalog.mjs               # models.json loader + live merge
+│   │       ├── resolve.mjs               # effort/variant resolution
+│   │       └── permissions.mjs           # SSE permission watcher
 │   ├── prompts/                          # Prompt templates
 │   ├── schemas/                          # Output schemas
 │   ├── scripts/                          # Node.js runtime
 │   │   ├── opencode-companion.mjs        # CLI entry point
+│   │   ├── sync-models.mjs               # Catalog sync (CLI parse or --live)
 │   │   ├── session-lifecycle-hook.mjs
 │   │   ├── stop-review-gate-hook.mjs
 │   │   └── lib/                          # Core modules

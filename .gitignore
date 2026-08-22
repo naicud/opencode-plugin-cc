@@ -3,3 +3,4 @@ node_modules/
 *.log
 .generated/
 /tmp/
+plugins/opencode/agents/opencode-delegate.md

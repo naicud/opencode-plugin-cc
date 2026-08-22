@@ -2,11 +2,71 @@
 // Unlike codex-plugin-cc which uses JSON-RPC over stdin/stdout,
 // OpenCode exposes a REST API + SSE. This module wraps that API.
 
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { spawn } from "node:child_process";
+import { stateRoot } from "./state.mjs";
 
-const DEFAULT_PORT = 4096;
 const DEFAULT_HOST = "127.0.0.1";
+const DEFAULT_PORT = 4096;
+const DERIVED_PORT_BASE = 4100;
+const DERIVED_PORT_SPAN = 400;
 const SERVER_START_TIMEOUT = 30_000;
+
+/**
+ * Derive a deterministic port for a workspace (CA-16): avoids every delegate
+ * colliding on the default port while keeping the port stable across calls.
+ * @param {string} cwd
+ * @returns {number}
+ */
+export function derivePort(cwd) {
+  const hash = crypto.createHash("sha256").update(cwd).digest("hex");
+  return DERIVED_PORT_BASE + (parseInt(hash.slice(0, 12), 16) % DERIVED_PORT_SPAN);
+}
+
+/**
+ * Validate the permissions object handed to OPENCODE_PERMISSION before spawn
+ * (findings P8: an invalid key starts a degraded server that answers healthy).
+ * @param {object} perms
+ */
+export function validateSpawnPermissions(perms) {
+  if (perms == null || typeof perms !== "object" || Array.isArray(perms)) {
+    throw new Error("OPENCODE_PERMISSION payload must be an object");
+  }
+  for (const [key, value] of Object.entries(perms)) {
+    if (!/^[a-z_]+$/.test(key)) {
+      throw new Error(`OPENCODE_PERMISSION invalid tool key "${key}"`);
+    }
+    const actions = typeof value === "string" ? { "*": value } : value;
+    if (typeof actions !== "object" || Array.isArray(actions)) {
+      throw new Error(`OPENCODE_PERMISSION "${key}" must be a string or pattern object`);
+    }
+    for (const action of Object.values(actions)) {
+      if (!["allow", "deny", "ask"].includes(action)) {
+        throw new Error(`OPENCODE_PERMISSION "${key}" has invalid action ${JSON.stringify(action)}`);
+      }
+    }
+  }
+}
+
+/**
+ * Probe a port without mistaking a foreign process for OpenCode.
+ * @param {string} host
+ * @param {number} port
+ * @returns {Promise<"ok"|"free"|"busy">} ok = OpenCode healthy, free = connection refused, busy = something else
+ */
+async function probePort(host, port) {
+  try {
+    const res = await fetch(`http://${host}:${port}/global/health`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    return res.ok ? "ok" : "busy";
+  } catch (err) {
+    const code = err?.cause?.code ?? err?.code ?? "";
+    return code === "ECONNREFUSED" ? "free" : "busy";
+  }
+}
 
 /**
  * Check if an OpenCode server is already running on the given port.
@@ -15,51 +75,72 @@ const SERVER_START_TIMEOUT = 30_000;
  * @returns {Promise<boolean>}
  */
 export async function isServerRunning(host = DEFAULT_HOST, port = DEFAULT_PORT) {
-  try {
-    const res = await fetch(`http://${host}:${port}/global/health`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
+  return (await probePort(host, port)) === "ok";
 }
 
 /**
  * Start the OpenCode server if not already running.
+ * The port is derived from the workspace unless opts.port is set; ports held by
+ * foreign processes are skipped incrementally. stdout/stderr go to
+ * <stateRoot>/servers/serve-<port>.log so start failures are diagnosable (CA-15).
  * @param {object} opts
+ * @param {string} opts.cwd - workspace directory (drives port derivation)
+ * @param {number} [opts.port] - explicit override
  * @param {string} [opts.host]
- * @param {number} [opts.port]
- * @param {string} [opts.cwd]
+ * @param {object} [opts.permissions] - OPENCODE_PERMISSION payload (spawn-time policy)
+ * @param {string} [opts.configPath] - OPENCODE_CONFIG file path
  * @returns {Promise<{ url: string, pid?: number, alreadyRunning: boolean }>}
  */
 export async function ensureServer(opts = {}) {
   const host = opts.host ?? DEFAULT_HOST;
-  const port = opts.port ?? DEFAULT_PORT;
-  const url = `http://${host}:${port}`;
+  const cwd = opts.cwd ?? process.cwd();
+  const firstPort = opts.port ?? derivePort(cwd);
 
-  if (await isServerRunning(host, port)) {
-    return { url, alreadyRunning: true };
+  let port = firstPort;
+  for (; port < firstPort + 10; port += 1) {
+    const probe = await probePort(host, port);
+    if (probe === "ok") {
+      return { url: `http://${host}:${port}`, alreadyRunning: true };
+    }
+    if (probe === "free") break;
   }
 
-  // Start the server
-  const proc = spawn("opencode", ["serve", "--port", String(port)], {
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
-    cwd: opts.cwd,
-  });
+  let permissionEnv;
+  if (opts.permissions != null) {
+    validateSpawnPermissions(opts.permissions);
+    permissionEnv = JSON.stringify(opts.permissions);
+  }
+
+  // Start the server with logs redirected to disk instead of dropped pipes
+  const logDir = path.join(stateRoot(cwd), "servers");
+  fs.mkdirSync(logDir, { recursive: true });
+  const logFile = path.join(logDir, `serve-${port}.log`);
+  const logStream = fs.openSync(logFile, "a");
+
+  const env = { ...process.env };
+  if (permissionEnv != null) env.OPENCODE_PERMISSION = permissionEnv;
+  if (opts.configPath != null) env.OPENCODE_CONFIG = opts.configPath;
+
+  const proc = spawn(
+    "opencode",
+    ["serve", "--port", String(port), "--hostname", host],
+    { stdio: ["ignore", logStream, logStream], detached: true, cwd, env }
+  );
   proc.unref();
 
   // Wait for the server to become ready
   const deadline = Date.now() + SERVER_START_TIMEOUT;
   while (Date.now() < deadline) {
     if (await isServerRunning(host, port)) {
-      return { url, pid: proc.pid, alreadyRunning: false };
+      return { url: `http://${host}:${port}`, pid: proc.pid, alreadyRunning: false };
     }
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  throw new Error(`OpenCode server failed to start within ${SERVER_START_TIMEOUT / 1000}s`);
+  throw new Error(
+    `OpenCode server failed to start within ${SERVER_START_TIMEOUT / 1000}s on port ${port}. ` +
+      `Check the server log at ${logFile}`
+  );
 }
 
 /**
@@ -153,6 +234,8 @@ export function createClient(baseUrl, opts = {}) {
 
     /**
      * Send a prompt asynchronously (returns immediately).
+     * Body shape per findings P1+P2: model is the nested {providerID, modelID}
+     * object; variant is a TOP-LEVEL field, sibling of model.
      */
     sendPromptAsync: (sessionId, promptText, opts = {}) => {
       const body = {
@@ -160,6 +243,7 @@ export function createClient(baseUrl, opts = {}) {
       };
       if (opts.agent) body.agent = opts.agent;
       if (opts.model) body.model = opts.model;
+      if (opts.variant) body.variant = opts.variant;
       return request("POST", `/session/${sessionId}/prompt_async`, body);
     },
 
@@ -169,6 +253,15 @@ export function createClient(baseUrl, opts = {}) {
     // Providers
     listProviders: () => request("GET", "/provider"),
     getProviderAuth: () => request("GET", "/provider/auth"),
+    getProviderCatalog: () => request("GET", "/config/providers"),
+
+    // Todos
+    getTodo: (id) => request("GET", `/session/${id}/todo`),
+
+    // Permissions (live shape per findings P5)
+    listPermissions: () => request("GET", "/permission"),
+    respondPermission: (sessionId, permissionId, response) =>
+      request("POST", `/session/${sessionId}/permissions/${permissionId}`, { response }),
 
     // Config
     getConfig: () => request("GET", "/config"),
@@ -194,4 +287,50 @@ export async function connect(opts = {}) {
   const { url } = await ensureServer(opts);
   const client = createClient(url, { directory: opts.cwd });
   return { ...client, serverInfo: { url } };
+}
+
+/**
+ * Parse an SSE byte stream into events. Hand-written parser (no deps):
+ * buffers chunks, splits on "\n", handles "data: {json}" lines and
+ * multi-line data fields. Tolerates events split mid-line across chunks.
+ * @param {ReadableStream} stream - body of GET /event
+ * @param {(event: object) => void} onEvent
+ * @returns {Promise<void>} resolves when the stream closes
+ */
+export async function consumeSseStream(stream, onEvent) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let nl;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, nl).replace(/\r$/, "");
+        buffer = buffer.slice(nl + 1);
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          onEvent(JSON.parse(payload));
+        } catch {
+          // Malformed JSON line: skip rather than kill the subscription.
+        }
+      }
+    }
+    // Flush any trailing event without newline
+    if (buffer.startsWith("data:")) {
+      try {
+        onEvent(JSON.parse(buffer.slice(5).trim()));
+      } catch {
+        // ignore
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
