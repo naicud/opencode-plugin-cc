@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **Retry chains**: `delegate` accepts `retryOf` (job id or prefix of a failed/cancelled
+  delegate job); validated against job history (`RETRY_TARGET_NOT_FOUND`, `RETRY_OF_AMBIGUOUS`),
+  stored in the job record and echoed in the response.
+- **Session resume**: `delegate` accepts `resumeSessionID` to continue an existing persisted
+  OpenCode session (crash recovery, multi-step delegation) instead of creating a new one;
+  fails fast with `RESUME_SESSION_NOT_FOUND`; E2E-verified by resuming an aborted session.
+- `/opencode:result` and `/opencode:cancel` now understand MCP delegate jobs (session id
+  normalization, model/variant/account and retry-chain rendering).
+
 ## [1.1.0] - 2026-08-23
 
 ### Added

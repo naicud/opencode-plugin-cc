@@ -184,6 +184,33 @@ async function main() {
     if (afterAbort.status === "needsInput") return fail("aborted session still asking for input");
     console.log(`abort ok: aborted=true, post-abort wait=${afterAbort.status}`);
 
+    /* 8. resume the aborted session via delegate.resumeSessionID */
+    const resumed = parseResult(await rpc("tools/call", {
+      name: "delegate",
+      arguments: {
+        task: "Il task precedente è stato interrotto. Crea ora il file resume-proof.txt con contenuto ESATTAMENTE: RESUME-OK e aggiorna .oc-report.md.",
+        cwd,
+        effort: "max",
+        resumeSessionID: slow.sessionID,
+      },
+    }));
+    if (resumed.sessionID !== slow.sessionID) return fail(`resume changed session id: ${resumed.sessionID}`);
+    if (resumed.resumedFrom !== slow.sessionID) return fail("resume response missing resumedFrom tie-back");
+    let resOutcome;
+    for (;;) {
+      resOutcome = parseResult(await rpc("tools/call", {
+        name: "wait",
+        arguments: { sessionID: resumed.sessionID, cwd, timeoutSec: 150 },
+      }));
+      if (resOutcome.status !== "timeout") break;
+    }
+    if (resOutcome.status === "needsInput") return fail("resumed run hit needsInput");
+    if (resOutcome.status !== "idle") return fail(`resume wait ended ${resOutcome.status}`);
+    const resumeProof = path.join(cwd, "resume-proof.txt");
+    if (!fs.existsSync(resumeProof)) return fail("resume artifact resume-proof.txt not created");
+    if (fs.readFileSync(resumeProof, "utf8").trim() !== "RESUME-OK") return fail("resume artifact content wrong");
+    console.log("resume ok: continued session produced resume-proof.txt (RESUME-OK)");
+
     console.log("\nE2E PASS: full stdio flow verified (handshake, catalog, max-effort delegation, artifacts, report contract, abort).");
   } catch (err) {
     fail(err.message);

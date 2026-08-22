@@ -102,14 +102,14 @@ To check your configured providers:
 - `/opencode:result` -- Shows final output for a finished job, including OpenCode session ID for resuming.
 - `/opencode:cancel` -- Cancels an active background OpenCode job.
 - `/opencode:setup` -- Checks OpenCode install/auth, can enable/disable the review gate hook.
-- `/opencode:delegate` -- Delegates a task through the MCP delegation runtime with `--model <id>`, `--tier N` (0–3), `--effort max|high|off`. The subagent `opencode-delegate` runs the delegate/wait/verify loop for you.
+- `/opencode:delegate` -- Delegates a task through the MCP delegation runtime with `--model <id>`, `--tier N` (0–3), `--effort max|high|off`, `--account <name|auto>`. The subagent `opencode-delegate` runs the delegate/wait/verify loop for you.
 
 ## Model Delegation (MCP)
 
 The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over stdio, zero npm deps) exposing six tools, reachable as `mcp__plugin_opencode_oc__models|delegate|wait|status|respond|abort`:
 
 - **models** — merged catalog (file + live `/config/providers`) with tiers, variants, real costs, effort policy and budget hint.
-- **delegate** — resolves model+variant client-side (the server accepts any variant string and silently falls back to base — see `docs/opencode-api-findings.md` P2), creates the session, fires `prompt_async` with the work contract from `config/models.json`, records a job visible to `/opencode:status`.
+- **delegate** — resolves model+variant client-side (the server accepts any variant string and silently falls back to base — see `docs/opencode-api-findings.md` P2), creates the session, fires `prompt_async` with the work contract from `config/models.json`, records a job visible to `/opencode:status`. Extras: `retryOf` links a re-run to a failed/cancelled job (validated against job history), and `resumeSessionID` continues an existing persisted session (crash recovery / multi-step) instead of creating a new one.
 - **wait** — polls every 5s; returns on idle, on pending permission (`needsInput`), or timeout.
 - **status** — non-blocking snapshot; failing sub-endpoints become `null`, never errors.
 - **respond** — answers a pending permission (`once` / `always` / `reject`). Auto-approve/auto-reject regexes live in `config/models.json`.
@@ -135,7 +135,7 @@ Reasoning-effort variants (`high`/`max`) bill reasoning tokens as **output** tok
 ### Testing
 
 ```bash
-npm test            # unit suite (105 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts
+npm test            # unit suite (125 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, job control
 npm run test:e2e    # full delegation round-trip against a real opencode server (needs auth)
 npm run test:stress # permission ask/deny, concurrency, server kill+restart recovery (needs auth)
 npm run test:multiaccount # round-robin rotation across two named credentials, per-account isolation, state persistence (needs auth)

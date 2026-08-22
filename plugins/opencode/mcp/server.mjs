@@ -153,25 +153,47 @@ async function toolDelegate(args) {
 
   const { client } = await getConnection(cwd, account);
   const agent = args.agent ?? config.defaults?.agent ?? "build";
-  const session = await client.createSession({
-    title: args.task.replace(/\s+/g, " ").slice(0, 80),
-  });
+
+  // resumeSessionID continues an existing persisted session (crash recovery,
+  // multi-step delegation) instead of creating a new one. Fail fast when the
+  // session does not exist on this server.
+  let sessionID;
+  let resumedFrom = null;
+  if (args.resumeSessionID != null) {
+    if (typeof args.resumeSessionID !== "string" || !args.resumeSessionID.trim()) {
+      throw Object.assign(new Error("resumeSessionID must be a non-empty session id"), { code: "RESUME_SESSION_INVALID" });
+    }
+    try {
+      await client.getMessages(args.resumeSessionID, { limit: 1 });
+    } catch {
+      throw Object.assign(new Error(`session "${args.resumeSessionID}" not found on this server; cannot resume`), { code: "RESUME_SESSION_NOT_FOUND" });
+    }
+    sessionID = args.resumeSessionID;
+    resumedFrom = args.resumeSessionID;
+  } else {
+    const session = await client.createSession({
+      title: args.task.replace(/\s+/g, " ").slice(0, 80),
+    });
+    sessionID = session.id;
+  }
+
   const promptText = `${renderContract(config.contract, cwd)}\n---\n\n${args.task}`;
 
-  await client.sendPromptAsync(session.id, promptText, {
+  await client.sendPromptAsync(sessionID, promptText, {
     agent,
     model: selector.model,
     variant: selection.variant,
   });
 
   const job = createJobRecord(cwd, "delegate", {
-    sessionID: session.id,
+    sessionID,
     model: selection.model.id,
     variant: selection.variant ?? null,
     effortApplied: selection.effortApplied,
     tier: selection.model.tier ?? null,
     account,
     directory: cwd,
+    ...(resumedFrom ? { resumedFrom } : {}),
     ...(retryTarget
       ? { retryOf: retryTarget.id, retryOfSession: retryTarget.sessionID ?? null }
       : {}),
@@ -179,7 +201,7 @@ async function toolDelegate(args) {
   upsertJob(cwd, { id: job.id, status: "running", phase: "delegated" });
 
   return {
-    sessionID: session.id,
+    sessionID,
     jobId: job.id,
     account,
     modelRef: `${config.provider}/${selection.model.id}`,
@@ -187,6 +209,7 @@ async function toolDelegate(args) {
     effortApplied: selection.effortApplied,
     reason: selection.reason ?? null,
     source: selection.source,
+    ...(resumedFrom ? { resumedFrom } : {}),
     ...(retryTarget ? { retryOf: retryTarget.id } : {}),
     cwd,
     startedAt: new Date().toISOString(),
@@ -398,6 +421,7 @@ const TOOLS = [
         account: { type: "string", description: 'OpenCode account for quota routing ("auto" default round-robin)' },
         agent: { type: "string", description: "OpenCode agent (default build)" },
         retryOf: { type: "string", description: "Job id or id prefix of a failed/cancelled delegate job this run retries" },
+        resumeSessionID: { type: "string", description: "Existing opencode session id to continue (crash recovery / multi-step) instead of creating a new session" },
       },
     },
   },
