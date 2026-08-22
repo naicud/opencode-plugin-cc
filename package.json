@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Use OpenCode from Claude Code to review code or delegate tasks.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "engines": {
     "node": ">=18.18.0"
   },
@@ -12,7 +12,8 @@
     "test": "node --test tests/*.test.mjs",
     "test:e2e": "node plugins/opencode/scripts/e2e-delegate.mjs",
     "models:sync": "node plugins/opencode/scripts/sync-models.mjs",
-    "test:stress": "node plugins/opencode/scripts/stress-delegate.mjs"
+    "test:stress": "node plugins/opencode/scripts/stress-delegate.mjs",
+    "test:multiaccount": "node plugins/opencode/scripts/stress-multiaccount.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
