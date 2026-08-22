@@ -39,9 +39,25 @@ function extractPayload(raw) {
 function contextFor(payload) {
   if (!payload || typeof payload !== "object") return null;
   if (payload.status === "idle") {
+    const esc = payload.escalation;
+    if (payload.error && esc?.retryable) {
+      return [
+        "Delegated OpenCode session FAILED.",
+        `Error: ${JSON.stringify(payload.error)}`,
+        esc.suggestModel
+          ? `Re-delegate with model "${esc.suggestModel}"${esc.suggestVariant ? ` and effort "${esc.suggestVariant}"` : ""} (reason: ${esc.reason}).`
+          : "No higher tier is configured — fix the account/quota or pick another provider.",
+      ].join(" ");
+    }
+    if (payload.error) {
+      return [
+        "Delegated OpenCode session finished with an error (not auto-retryable).",
+        `Error: ${JSON.stringify(payload.error)}`,
+        payload.response ? `Final message: ${String(payload.response).slice(0, 400)}` : null,
+      ].filter(Boolean).join(" ");
+    }
     const parts = [
       "Delegated OpenCode session finished (idle).",
-      payload.error ? `Session error: ${JSON.stringify(payload.error)}` : null,
       payload.response ? `Final message: ${String(payload.response).slice(0, 400)}` : null,
       "Before trusting success: read .oc-report.md in the workspace, check the files it lists exist, and re-run any read-only verification command yourself.",
     ].filter(Boolean);

@@ -146,6 +146,8 @@ npm run models:sync [-- --live]   # refresh config/models.json from the live cat
 
 A PostToolUse hook (`scripts/delegation-context-hook.mjs`) watches `wait`/`status` MCP calls and injects an `additionalContext` note into Claude's context when a delegated task finishes, blocks on a pending permission (`needsInput`), or times out — so the supervisor notices without polling manually.
 
+When a task ends with a retryable assistant error (quota exhausted, rate limit, provider 5xx), `wait` attaches an `escalation` object (`kind`, `suggestModel`, `suggestVariant`) pointing at the next configured tier, and the hook tells Claude exactly how to re-delegate — no guessing, no silent failure.
+
 ### Multi-account quota routing
 
 Multiple OpenCode accounts can be pooled to amplify quotas. Accounts are declared in `config/models.json` (names only — never secrets):

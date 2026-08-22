@@ -91,4 +91,35 @@ describe("delegation-context-hook", () => {
     const out = JSON.parse(res.stdout);
     assert.match(out.hookSpecificOutput.additionalContext, /idle/);
   });
+
+  it("surfaces retryable failure with escalation suggestion", () => {
+    const res = runHook({
+      tool_name: "mcp__plugin_opencode_oc__wait",
+      ...mcpResult({
+        status: "idle",
+        error: { name: "CreditsError", data: { message: "no balance", statusCode: 401 } },
+        escalation: { kind: "auth", retryable: true, suggestModel: "deepseek-v4-flash", suggestVariant: "max", reason: "auth failure on x-preview-f-free" },
+      }),
+    });
+    const out = JSON.parse(res.stdout);
+    assert.match(out.hookSpecificOutput.additionalContext, /FAILED/);
+    assert.match(out.hookSpecificOutput.additionalContext, /deepseek-v4-flash/);
+    assert.match(out.hookSpecificOutput.additionalContext, /"max"/);
+    assert.match(out.hookSpecificOutput.additionalContext, /auth failure/);
+  });
+
+  it("non-retryable error gets plain error context without suggestion", () => {
+    const res = runHook({
+      tool_name: "mcp__plugin_opencode_oc__wait",
+      ...mcpResult({
+        status: "idle",
+        error: { name: "MessageAbortedError" },
+        escalation: { kind: "abort", retryable: false },
+        response: "partial text",
+      }),
+    });
+    const out = JSON.parse(res.stdout);
+    assert.match(out.hookSpecificOutput.additionalContext, /not auto-retryable/);
+    assert.doesNotMatch(out.hookSpecificOutput.additionalContext, /Re-delegate/);
+  });
 });

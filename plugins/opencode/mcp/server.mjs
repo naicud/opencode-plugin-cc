@@ -16,6 +16,7 @@ import { loadConfig, getCatalog, formatHint } from "./lib/catalog.mjs";
 import { resolveSelection, buildModelSelector } from "./lib/resolve.mjs";
 import { createPermissionWatcher } from "./lib/permissions.mjs";
 import { pickAccount, buildAuthContent, envKeyName, listAccounts } from "./lib/accounts.mjs";
+import { buildEscalation } from "./lib/escalation.mjs";
 import { createJobRecord } from "../scripts/lib/tracked-jobs.mjs";
 import { loadState, upsertJob } from "../scripts/lib/state.mjs";
 
@@ -269,6 +270,9 @@ async function toolWait(args) {
         account,
         state,
         error: outcome?.info?.error ?? null,
+        ...(outcome?.info?.error
+          ? { escalation: buildEscalation(outcome.info.error, loadConfig(), outcome.info.modelID) }
+          : {}),
         cost: outcome?.info?.cost ?? null,
         tokens: outcome?.info?.tokens ?? null,
         variant: outcome?.info?.variant ?? null,
