@@ -179,6 +179,13 @@ async function toolWait(args) {
     const state = statuses?.[args.sessionID] ?? { type: "idle" };
     if (state.type !== "busy") {
       const outcome = await fetchAssistantOutcome(client, args.sessionID);
+      // Race guard (E2E finding): right after prompt_async the session is not
+      // yet marked busy AND has no assistant reply. Treat as still starting.
+      if (!outcome && Date.now() < deadline - WAIT_POLL_INTERVAL_MS) {
+        if (Date.now() >= deadline) return { status: "timeout", sessionID: args.sessionID, state };
+        await new Promise((r) => setTimeout(r, WAIT_POLL_INTERVAL_MS));
+        continue;
+      }
       if (outcome?.info?.error) {
         markJobBySession(cwd, args.sessionID, (job) => ({
           status: "failed",

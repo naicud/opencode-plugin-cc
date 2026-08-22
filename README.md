@@ -42,7 +42,7 @@ Then reload the plugin:
 You should see:
 
 ```
-Reloaded: 1 plugin · 8 skills · 7 agents · 3 hooks ...
+Reloaded: 1 plugin · 4 skills · 2 agents · 3 hooks ...
 ```
 
 Finally, verify your setup:
@@ -125,7 +125,15 @@ Effort is always `max` (strict chains in `variantPreference` — no silent downg
 
 ### Cost note
 
-Reasoning-effort variants (`high`/`max`) bill reasoning tokens as **output** tokens: a tier-3 run at `max` can cost 10× its base price. The default policy (`effortPolicy.mode: "max"`) is intentional — if diffs don't improve over a week of use, switch to `"perTier"` in `config/models.json`.
+Reasoning-effort variants (`high`/`max`) bill reasoning tokens as **output** tokens: a tier-3 run at `max` can cost 10× its base price. The `max`-always policy is deliberate (quality over cost); to make effort tier-dependent instead, set `effortPolicy.mode: "perTier"` in `config/models.json`.
+
+### Testing
+
+```bash
+npm test          # unit suite (81 tests): catalog merge, resolve, JSON-RPC, permissions/SSE
+npm run test:e2e  # full delegation round-trip against a real opencode server (needs auth)
+npm run models:sync [-- --live]   # refresh config/models.json from the live catalog
+```
 
 ### Cleanup
 

@@ -63,6 +63,11 @@ async function main() {
 
   const rpc = (method, params) =>
     new Promise((resolve, reject) => {
+      if (method.startsWith("notifications/")) {
+        proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n");
+        resolve(null); // notifications never get a response
+        return;
+      }
       const id = nextId++;
       const timer = setTimeout(() => reject(new Error(`timeout on ${method}; stderr=${stderr.slice(-400)}`)), 120_000);
       pending.set(id, (msg) => {
