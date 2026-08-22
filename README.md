@@ -130,10 +130,15 @@ Reasoning-effort variants (`high`/`max`) bill reasoning tokens as **output** tok
 ### Testing
 
 ```bash
-npm test          # unit suite (81 tests): catalog merge, resolve, JSON-RPC, permissions/SSE
-npm run test:e2e  # full delegation round-trip against a real opencode server (needs auth)
+npm test            # unit suite (88 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook
+npm run test:e2e    # full delegation round-trip against a real opencode server (needs auth)
+npm run test:stress # permission ask/deny, concurrency, server kill+restart recovery (needs auth)
 npm run models:sync [-- --live]   # refresh config/models.json from the live catalog
 ```
+
+### Delegation notifications hook
+
+A PostToolUse hook (`scripts/delegation-context-hook.mjs`) watches `wait`/`status` MCP calls and injects an `additionalContext` note into Claude's context when a delegated task finishes, blocks on a pending permission (`needsInput`), or times out — so the supervisor notices without polling manually.
 
 ### Cleanup
 

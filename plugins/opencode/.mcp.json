@@ -4,7 +4,9 @@
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/server.mjs"],
       "env": {
-        "OC_MODELS_CONFIG": "${CLAUDE_PLUGIN_ROOT}/config/models.json"
+        "OC_MODELS_CONFIG": "${CLAUDE_PLUGIN_ROOT}/config/models.json",
+        "OPENCODE_SERVER_PASSWORD": "${OPENCODE_SERVER_PASSWORD}",
+        "OPENCODE_SERVER_USERNAME": "${OPENCODE_SERVER_USERNAME}"
       }
     }
   }

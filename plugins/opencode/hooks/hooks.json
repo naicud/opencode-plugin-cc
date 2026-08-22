@@ -33,6 +33,18 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__plugin_opencode_oc__(wait|status)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/delegation-context-hook.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

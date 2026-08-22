@@ -156,16 +156,38 @@ async function main() {
   ok("server killed mid-run", killed);
   await sleep(1000);
 
-  // Restart on the SAME port: watcher-style recovery expects reconnection
+  // Restart on the SAME port: persisted sessions must survive the restart
   spawn("opencode", ["serve", "--port", "4321", "--hostname", "127.0.0.1"], {
     detached: true,
     stdio: "ignore",
     cwd,
   }).unref();
-  await sleep(6000);
+  // Wait for health instead of a fixed sleep
+  for (let i = 0; i < 30; i += 1) {
+    try {
+      const h = await fetch("http://127.0.0.1:4321/global/health", { signal: AbortSignal.timeout(2000) });
+      if (h.ok) break;
+    } catch {}
+    await sleep(1000);
+  }
 
-  const rKill = await waitIdle(client, sKill.id, 240_000);
-  ok("session recovered after server restart", !!rKill && rKill.text.includes("DONE-KILL-TEST"), rKill ? rKill.text.slice(0, 60) : "timeout");
+  // OpenCode does NOT auto-resume an in-flight request killed with the server:
+  // it records MessageAbortedError. Real recovery = re-prompt the SAME session
+  // (state is persisted on disk), which is what the supervisor loop does.
+  const rKill = await waitIdle(client, sKill.id, 20_000);
+  if (!rKill || !rKill.text.includes("DONE-KILL-TEST")) {
+    await client.sendPromptAsync(
+      sKill.id,
+      "Riprendi il task precedente: conta da dove eri arrivato fino a 20, poi scrivi DONE-KILL-TEST.",
+      { model: MODEL, variant: VARIANT }
+    );
+  }
+  const rResume = (await waitIdle(client, sKill.id, 240_000)) ?? rKill;
+  ok(
+    "session recovered after server restart",
+    !!rResume && rResume.text.includes("DONE-KILL-TEST"),
+    rResume ? rResume.text.slice(0, 60) : "timeout"
+  );
 
   console.log(`\n${failures === 0 ? "ALL STRESS TESTS PASSED" : failures + " FAILURES"}`);
   process.exit(failures === 0 ? 0 : 1);
