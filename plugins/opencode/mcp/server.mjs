@@ -111,6 +111,30 @@ async function toolDelegate(args) {
   }
   const config = loadConfig();
 
+  // Retry chains: retryOf must reference a failed or cancelled delegate job.
+  let retryTarget = null;
+  if (args.retryOf != null) {
+    if (typeof args.retryOf !== "string" || !args.retryOf.trim()) {
+      throw Object.assign(new Error('retryOf must be a non-empty job id or prefix'), { code: "RETRY_OF_INVALID" });
+    }
+    const candidates = (loadState(cwd).jobs ?? []).filter(
+      (j) => j.type === "delegate" && (j.status === "failed" || j.status === "cancelled")
+    );
+    const exact = candidates.find((j) => j.id === args.retryOf);
+    if (exact) {
+      retryTarget = exact;
+    } else {
+      const prefixMatches = candidates.filter((j) => j.id.startsWith(args.retryOf));
+      if (prefixMatches.length > 1) {
+        throw Object.assign(new Error(`retryOf prefix "${args.retryOf}" is ambiguous across ${prefixMatches.length} jobs`), { code: "RETRY_OF_AMBIGUOUS" });
+      }
+      retryTarget = prefixMatches[0] ?? null;
+    }
+    if (!retryTarget) {
+      throw Object.assign(new Error(`retryOf "${args.retryOf}" does not match any failed or cancelled delegate job`), { code: "RETRY_TARGET_NOT_FOUND" });
+    }
+  }
+
   // Resolve the account BEFORE spawning: fail fast on missing credentials.
   let account = null;
   const accountsBlock = config.accounts;
@@ -148,6 +172,9 @@ async function toolDelegate(args) {
     tier: selection.model.tier ?? null,
     account,
     directory: cwd,
+    ...(retryTarget
+      ? { retryOf: retryTarget.id, retryOfSession: retryTarget.sessionID ?? null }
+      : {}),
   });
   upsertJob(cwd, { id: job.id, status: "running", phase: "delegated" });
 
@@ -160,6 +187,7 @@ async function toolDelegate(args) {
     effortApplied: selection.effortApplied,
     reason: selection.reason ?? null,
     source: selection.source,
+    ...(retryTarget ? { retryOf: retryTarget.id } : {}),
     cwd,
     startedAt: new Date().toISOString(),
   };
@@ -369,6 +397,7 @@ const TOOLS = [
         effort: { type: "string", enum: ["off", "high", "max"], description: "Effort request; default from effortPolicy" },
         account: { type: "string", description: 'OpenCode account for quota routing ("auto" default round-robin)' },
         agent: { type: "string", description: "OpenCode agent (default build)" },
+        retryOf: { type: "string", description: "Job id or id prefix of a failed/cancelled delegate job this run retries" },
       },
     },
   },

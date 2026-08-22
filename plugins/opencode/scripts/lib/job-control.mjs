@@ -23,6 +23,13 @@ export function sortJobsNewestFirst(jobs) {
 export function enrichJob(job, workspacePath) {
   const enriched = { ...job };
 
+  // MCP delegate jobs store the OpenCode session as `sessionID`; legacy
+  // companion jobs use `opencodeSessionId`. Normalize so render/cancel paths
+  // work with both shapes.
+  if (!enriched.opencodeSessionId && enriched.sessionID) {
+    enriched.opencodeSessionId = enriched.sessionID;
+  }
+
   // Elapsed time
   if (job.createdAt) {
     const start = new Date(job.createdAt).getTime();

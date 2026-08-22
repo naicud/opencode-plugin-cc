@@ -61,6 +61,15 @@ export function renderResult(job, resultData) {
   if (job.opencodeSessionId) {
     lines.push(`- **OpenCode Session**: ${job.opencodeSessionId}`);
   }
+  if (job.model) {
+    const bits = [job.model];
+    if (job.variant) bits.push(`variant=${job.variant}`);
+    if (job.account) bits.push(`account=${job.account}`);
+    lines.push(`- **Model**: ${bits.join(" · ")}`);
+  }
+  if (job.retryOf) {
+    lines.push(`- **Retry of**: ${job.retryOf}`);
+  }
 
   lines.push("");
 

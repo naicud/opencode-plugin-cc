@@ -479,11 +479,13 @@ async function handleCancel(argv) {
     return;
   }
 
-  // Abort the OpenCode session if we have one
-  if (job.opencodeSessionId) {
+  // Abort the OpenCode session if we have one. MCP delegate jobs store the
+  // session under `sessionID` instead of `opencodeSessionId`.
+  const sessionId = job.opencodeSessionId ?? job.sessionID;
+  if (sessionId) {
     try {
       const client = createClient("http://127.0.0.1:4096");
-      await client.abortSession(job.opencodeSessionId);
+      await client.abortSession(sessionId);
     } catch {
       // Server may not be running
     }
