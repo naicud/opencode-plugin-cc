@@ -171,7 +171,9 @@ async function main() {
     console.log("reject ok: ghost account → ACCOUNT_UNKNOWN");
 
     /* state persistence: jobs carry account, LRU recorded */
-    const state = JSON.parse(fs.readFileSync(path.join(pluginData, "state", "state.json"), "utf8"));
+    process.env.CLAUDE_PLUGIN_DATA = pluginData;
+    const { stateRoot } = await import("../scripts/lib/state.mjs");
+    const state = JSON.parse(fs.readFileSync(path.join(stateRoot(workspace), "state.json"), "utf8"));
     const jobs = state.jobs ?? [];
     const expected = [
       [r1.del.jobId, "accA"],

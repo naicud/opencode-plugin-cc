@@ -139,6 +139,7 @@ npm test            # unit suite (105 tests): catalog merge, resolve, JSON-RPC, 
 npm run test:e2e    # full delegation round-trip against a real opencode server (needs auth)
 npm run test:stress # permission ask/deny, concurrency, server kill+restart recovery (needs auth)
 npm run test:multiaccount # round-robin rotation across two named credentials, per-account isolation, state persistence (needs auth)
+npm run test:escalation  # doomed-credential run proves wait surfaces retryable errors with next-tier escalation (needs auth)
 npm run models:sync [-- --live]   # refresh config/models.json from the live catalog
 ```
 

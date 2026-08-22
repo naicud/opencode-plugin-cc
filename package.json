@@ -13,7 +13,8 @@
     "test:e2e": "node plugins/opencode/scripts/e2e-delegate.mjs",
     "models:sync": "node plugins/opencode/scripts/sync-models.mjs",
     "test:stress": "node plugins/opencode/scripts/stress-delegate.mjs",
-    "test:multiaccount": "node plugins/opencode/scripts/stress-multiaccount.mjs"
+    "test:multiaccount": "node plugins/opencode/scripts/stress-multiaccount.mjs",
+    "test:escalation": "node plugins/opencode/scripts/stress-escalation.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
