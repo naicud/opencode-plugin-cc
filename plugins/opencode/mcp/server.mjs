@@ -333,7 +333,17 @@ async function toolWait(args) {
     }
 
     if (Date.now() >= deadline) {
-      return { status: "timeout", sessionID: args.sessionID, state };
+      // Live progress: at deadline, attach a short tail of the latest assistant
+      // text plus todos so the supervisor sees movement without extra calls.
+      const progress = await fetchAssistantOutcome(client, args.sessionID).catch(() => null);
+      return {
+        status: "timeout",
+        sessionID: args.sessionID,
+        jobId: job?.id ?? null,
+        account,
+        state,
+        ...(progress?.text ? { progress: { tail: progress.text.slice(-300), todos: await summarizeTodos(client, args.sessionID) } } : {}),
+      };
     }
     await new Promise((r) => setTimeout(r, WAIT_POLL_INTERVAL_MS));
   }

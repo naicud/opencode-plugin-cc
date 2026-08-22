@@ -3,7 +3,7 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.2.0] - 2026-08-23
 
 ### Added
 - **Retry chains**: `delegate` accepts `retryOf` (job id or prefix of a failed/cancelled
@@ -14,6 +14,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fails fast with `RESUME_SESSION_NOT_FOUND`; E2E-verified by resuming an aborted session.
 - `/opencode:result` and `/opencode:cancel` now understand MCP delegate jobs (session id
   normalization, model/variant/account and retry-chain rendering).
+- **Live wait progress**: when `wait` hits its deadline the response carries a `progress`
+  object (latest assistant text tail + todo counts), and the delegation hook surfaces it
+  so Claude sees movement without extra `status` calls.
+
+### Changed
+- Version bumps and docs propagation of retry/resume/escalation flows into the skill,
+  agent and command guidance.
 
 ## [1.1.0] - 2026-08-23
 

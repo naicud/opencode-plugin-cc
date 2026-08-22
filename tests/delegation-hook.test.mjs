@@ -57,6 +57,21 @@ describe("delegation-context-hook", () => {
     assert.match(out.hookSpecificOutput.additionalContext, /timeout/);
   });
 
+  it("timeout context includes progress tail and todos when present", () => {
+    const res = runHook({
+      tool_name: "mcp__plugin_opencode_oc__wait",
+      ...mcpResult({
+        status: "timeout",
+        progress: { tail: "editing src/foo.ts...", todos: { counts: { completed: 2, in_progress: 1 }, current: "write tests", total: 3 } },
+      }),
+    });
+    const out = JSON.parse(res.stdout);
+    const ctx = out.hookSpecificOutput.additionalContext;
+    assert.match(ctx, /timeout/);
+    assert.match(ctx, /editing src\/foo\.ts\.\.\./);
+    assert.match(ctx, /current: write tests/);
+  });
+
   it("silent for unrelated tools", () => {
     const res = runHook({
       tool_name: "mcp__plugin_opencode_oc__models",

@@ -74,7 +74,17 @@ function contextFor(payload) {
     ].join("\n");
   }
   if (payload.status === "timeout") {
-    return "Delegated OpenCode session did not reach idle within the wait timeout. Call wait again; after two consecutive timeouts abort the session.";
+    const parts = [
+      "Delegated OpenCode session did not reach idle within the wait timeout. Call wait again; after two consecutive timeouts abort the session.",
+    ];
+    const progress = payload.progress;
+    if (progress?.tail) {
+      parts.push(`Latest assistant output tail:\n${progress.tail}`);
+    }
+    if (progress?.todos) {
+      parts.push(`Todo progress: ${JSON.stringify(progress.todos.counts)}${progress.todos.current ? ` — current: ${progress.todos.current}` : ""}.`);
+    }
+    return parts.join("\n\n");
   }
   return null;
 }
