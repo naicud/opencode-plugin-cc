@@ -262,6 +262,19 @@ The script tries SSH first, then HTTPS. If both fail:
 3. Run `/opencode:setup` to check the full status.
 </details>
 
+<details>
+<summary><strong>Server authentication (basic auth)</strong></summary>
+
+The plugin needs no auth configuration. It uses your standard OpenCode setup:
+
+- If you run `opencode serve` without a password, the plugin talks to it directly
+  (unauthenticated localhost, the OpenCode default).
+- If you protect the server with OpenCode's own env vars — `OPENCODE_SERVER_PASSWORD`
+  and optionally `OPENCODE_SERVER_USERNAME` — export them in your shell before starting
+  Claude Code. Both the MCP server and every spawned `opencode serve` inherit your
+  environment automatically; nothing to configure in `.mcp.json`.
+</details>
+
 ## Architecture
 
 Unlike codex-plugin-cc which uses JSON-RPC over stdin/stdout to a Codex app-server, this plugin

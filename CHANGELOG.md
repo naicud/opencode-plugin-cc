@@ -112,8 +112,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - MCP tool descriptors now carry `title` and standard annotations (`readOnlyHint`,
   `destructiveHint`, …).
 - Permission rules hot-reload: the watcher re-reads config on every event (no MCP restart needed).
-- `.mcp.json` passes `OPENCODE_SERVER_PASSWORD`/`OPENCODE_SERVER_USERNAME` through for
-  authenticated opencode serve instances.
+- `.mcp.json` no longer references `OPENCODE_SERVER_PASSWORD`/`OPENCODE_SERVER_USERNAME`.
+  The MCP server process and every spawned `opencode serve` inherit the user's shell
+  environment, so standard OpenCode auth env vars work without any plugin-side config
+  (and unset vars no longer break Claude's strict `${VAR}` validation on install).
 - `delegate` creates titled sessions (task-derived) visible in the OpenCode UI; `wait` responses
   include `jobId` tie-back, `account`, and a todo progress summary.
 

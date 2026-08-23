@@ -250,6 +250,36 @@ async function main() {
     }
     console.log("fanOut ok: 2 parallel tasks byte-exact via waitAll");
 
+    /* 8d. fanOut race mode: same task twice, first clean finish wins,
+           the loser is aborted automatically */
+    const race = parseResult(await rpc("tools/call", {
+      name: "fanOut",
+      arguments: {
+        cwd,
+        mode: "race",
+        timeoutSec: 240,
+        titlePrefix: "Race",
+        effort: "max",
+        tasks: [
+          "Crea il file race-proof.txt con contenuto ESATTAMENTE: RACE-OK. Aggiorna .oc-report.md.",
+          "Crea il file race-proof.txt con contenuto ESATTAMENTE: RACE-OK. Aggiorna .oc-report.md.",
+        ],
+      },
+    }));
+    if (race.mode !== "race") return fail(`race mode not echoed: ${race.mode}`);
+    if (!race.winner?.sessionID || !race.winner?.jobId) {
+      return fail(`race produced no winner: ${JSON.stringify(race).slice(0, 300)}`);
+    }
+    if (race.aborted.length !== 1) return fail(`expected exactly 1 aborted loser: ${JSON.stringify(race.aborted)}`);
+    if (!/COMPLETED|PARTIAL/.test(race.winner.response ?? "")) {
+      return fail(`winner response lacks STATUS verdict: ${(race.winner.response ?? "").slice(0, 200)}`);
+    }
+    const raceProof = path.join(cwd, "race-proof.txt");
+    if (!fs.existsSync(raceProof)) return fail("race artifact race-proof.txt missing");
+    if (fs.readFileSync(raceProof, "utf8").trim() !== "RACE-OK") return fail("race artifact content wrong");
+    if (!/verify/.test(race.nextStep)) return fail(`race nextStep should say verify: ${race.nextStep}`);
+    console.log(`race ok: winner=${race.winner.sessionID.slice(0, 12)}… losers aborted=${race.aborted.length}, artifact RACE-OK`);
+
     /* 9. clean shutdown: kill the plugin-spawned server, verify port freed */
     const sd = parseResult(await rpc("tools/call", {
       name: "shutdown",
@@ -280,7 +310,7 @@ async function main() {
     }
     console.log("port check ok: all stopped ports are free");
 
-    console.log("\nE2E PASS: full stdio flow verified (handshake, catalog, max-effort delegation, artifacts, report contract, abort, resume, doctor, fanOut+waitAll, clean shutdown).");
+    console.log("\nE2E PASS: full stdio flow verified (handshake, catalog, max-effort delegation, artifacts, report contract, abort, resume, doctor, fanOut+waitAll, race mode, clean shutdown).");
   } catch (err) {
     fail(err.message);
   } finally {

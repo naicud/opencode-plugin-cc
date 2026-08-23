@@ -116,6 +116,17 @@ export function validateSpawnPermissions(perms) {
 }
 
 /**
+ * Validate an OPENCODE_CONFIG_CONTENT payload (JSON object merge fragment).
+ * P8-class guard: malformed config content yields healthy-but-degraded servers.
+ * @param {object} content
+ */
+export function validateConfigContent(content) {
+  if (content == null || typeof content !== "object" || Array.isArray(content)) {
+    throw new Error("OPENCODE_CONFIG_CONTENT must be a JSON object");
+  }
+}
+
+/**
  * Probe a port without mistaking a foreign process for OpenCode.
  * @param {string} host
  * @param {number} port
@@ -265,6 +276,7 @@ export async function stopTrackedServers(cwd, opts = {}) {
  * @param {string} [opts.authContent] - OPENCODE_AUTH_CONTENT payload (validated before spawn)
  * @param {object} [opts.permissions] - OPENCODE_PERMISSION payload (spawn-time policy)
  * @param {string} [opts.configPath] - OPENCODE_CONFIG file path
+ * @param {object} [opts.configContent] - OPENCODE_CONFIG_CONTENT JSON object (merged over user config)
  * @returns {Promise<{ url: string, pid?: number, alreadyRunning: boolean }>}
  */
 export async function ensureServer(opts = {}) {
@@ -293,6 +305,12 @@ export async function ensureServer(opts = {}) {
     authContentEnv = opts.authContent;
   }
 
+  let configContentEnv;
+  if (opts.configContent != null) {
+    validateConfigContent(opts.configContent);
+    configContentEnv = JSON.stringify(opts.configContent);
+  }
+
   // Start the server with logs redirected to disk instead of dropped pipes
   const logDir = path.join(stateRoot(cwd), "servers");
   fs.mkdirSync(logDir, { recursive: true });
@@ -303,7 +321,7 @@ export async function ensureServer(opts = {}) {
   if (permissionEnv != null) env.OPENCODE_PERMISSION = permissionEnv;
   if (opts.configPath != null) env.OPENCODE_CONFIG = opts.configPath;
   if (authContentEnv != null) env.OPENCODE_AUTH_CONTENT = authContentEnv;
-
+  if (configContentEnv != null) env.OPENCODE_CONFIG_CONTENT = configContentEnv;
   const proc = spawn(
     "opencode",
     ["serve", "--port", String(port), "--hostname", host],

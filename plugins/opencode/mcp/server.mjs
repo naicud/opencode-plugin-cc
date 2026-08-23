@@ -22,6 +22,7 @@ import { loadConfig, getCatalog, formatHint, formatCostTable } from "./lib/catal
 import { resolveSelection, buildModelSelector } from "./lib/resolve.mjs";
 import { createPermissionWatcher } from "./lib/permissions.mjs";
 import { pickAccount, buildAuthContent, envKeyName, listAccounts } from "./lib/accounts.mjs";
+import { buildAgentConfigContent, validateAgentConfigContent, AGENT_NAME } from "./lib/agent.mjs";
 import { buildEscalation } from "./lib/escalation.mjs";
 import { checkBudget, summarizeBudget } from "./lib/budget.mjs";
 import { runDiagnostics, formatDoctorReport } from "../scripts/lib/doctor.mjs";
@@ -38,7 +39,8 @@ const connections = new Map();
 /**
  * Get (or create) a client + permission watcher pair for a workspace/account.
  * Per-account servers coexist on distinct derived ports; each is spawned with
- * its own OPENCODE_AUTH_CONTENT credential set.
+ * its own OPENCODE_AUTH_CONTENT credential set and the server-side
+ * "oc-delegate" agent (work contract baked into the agent definition).
  * @param {string} cwd
  * @param {string|null} account - resolved account name or null (legacy path)
  */
@@ -49,10 +51,12 @@ async function getConnection(cwd, account = null) {
     const key = process.env[envKeyName(account)];
     authContent = buildAuthContent(config.provider, key ?? "");
   }
+  const agentContent = buildAgentConfigContent(renderContract(config.contract ?? "", cwd));
   const { url } = await ensureServer({
     cwd,
     account,
     permissions: config.permissions?.spawn,
+    configContent: agentContent,
     ...(authContent ? { authContent } : {}),
   });
   let conn = connections.get(url);
@@ -64,6 +68,32 @@ async function getConnection(cwd, account = null) {
     connections.set(url, conn);
   }
   return conn;
+}
+
+/**
+ * Resolve which agent a delegated session should run under: our injected
+ * "oc-delegate" when the server knows it, else the stock "build" agent
+ * (compat shim for older CLIs — reported in delegate responses as
+ * supervisorAgent so nothing degrades silently).
+ * Result cached per connection.
+ */
+async function resolveDelegationAgent(conn) {
+  if (conn.delegationAgent) return conn.delegationAgent;
+  let available = false;
+  try {
+    const agents = await conn.client.listAgents();
+    const names = new Set(
+      (Array.isArray(agents) ? agents : Object.keys(agents ?? {})).map((a) =>
+        typeof a === "string" ? a : a?.name
+      )
+    );
+    available = names.has(AGENT_NAME);
+  } catch {
+    available = false;
+  }
+  conn.delegationAgent = available ? AGENT_NAME : "build";
+  conn.delegationAgentInjected = available;
+  return conn.delegationAgent;
 }
 
 function getClient(cwd, account = null) {
@@ -190,8 +220,12 @@ async function toolDelegate(args) {
   );
   const selector = buildModelSelector(config.provider, selection.model.id, selection.variant);
 
-  const { client } = await getConnection(cwd, account);
-  const agent = args.agent ?? config.defaults?.agent ?? "build";
+  const conn = await getConnection(cwd, account);
+  const { client } = conn;
+  // Server-side agent: our injected "oc-delegate" carries the work contract;
+  // explicit args.agent still wins; stock "build" is the reported compat shim.
+  const agent = args.agent ?? config.defaults?.agent ?? (await resolveDelegationAgent(conn));
+  const agentInjected = args.agent || config.defaults?.agent ? null : conn.delegationAgentInjected === true;
 
   // resumeSessionID continues an existing persisted session (crash recovery,
   // multi-step delegation) instead of creating a new one. Fail fast when the
@@ -253,6 +287,8 @@ async function toolDelegate(args) {
     effortApplied: selection.effortApplied,
     reason: selection.reason ?? null,
     source: selection.source,
+    agent,
+    ...(agentInjected === false ? { agentNote: `server does not expose "${AGENT_NAME}" agent; ran under stock "build" (contract still prepended to the prompt)` } : {}),
     ...(resumedFrom ? { resumedFrom } : {}),
     ...(retryTarget ? { retryOf: retryTarget.id } : {}),
     cwd,
@@ -266,6 +302,10 @@ async function toolDelegate(args) {
  * configured), one job record each tagged with a shared fanOutId. Supervise the
  * batch afterwards with waitAll. Partial failures mid-loop keep already-started
  * tasks running and are reported instead of discarding the work.
+ *
+ * mode:"race" supervises inline instead: the first task that reaches idle
+ * WITHOUT an assistant error wins; every other session is aborted (jobs marked
+ * cancelled as race-loser) so losers stop burning quota immediately.
  */
 async function toolFanOut(args) {
   if (!Array.isArray(args.tasks) || args.tasks.length === 0) {
@@ -288,6 +328,12 @@ async function toolFanOut(args) {
   if (args.titlePrefix != null && (typeof args.titlePrefix !== "string" || !args.titlePrefix.trim())) {
     throw Object.assign(new Error('fanOut: "titlePrefix" must be a non-empty string'), {
       code: "TITLE_PREFIX_INVALID",
+    });
+  }
+  const mode = args.mode ?? "batch";
+  if (!["batch", "race"].includes(mode)) {
+    throw Object.assign(new Error('fanOut: "mode" must be "batch" or "race"'), {
+      code: "MODE_INVALID",
     });
   }
 
@@ -325,7 +371,8 @@ async function toolFanOut(args) {
     config
   );
   const selector = buildModelSelector(config.provider, selection.model.id, selection.variant);
-  const agent = args.agent ?? config.defaults?.agent ?? "build";
+  const firstConn = await getConnection(cwd, firstAccount);
+  const agent = args.agent ?? config.defaults?.agent ?? (await resolveDelegationAgent(firstConn));
   const prefix = (
     typeof args.titlePrefix === "string" && args.titlePrefix.trim()
       ? args.titlePrefix.replace(/\s+/g, " ").trim()
@@ -383,7 +430,7 @@ async function toolFanOut(args) {
     }
   }
 
-  return {
+  const batchResult = {
     fanOutId,
     total: n,
     started: jobs.length,
@@ -392,10 +439,89 @@ async function toolFanOut(args) {
     modelRef: `${config.provider}/${selection.model.id}`,
     variant: selection.variant ?? null,
     effortApplied: selection.effortApplied,
-    nextStep:
-      jobs.length > 0
-        ? `Supervise with waitAll on these sessionIDs: ${jobs.map((j) => j.sessionID).join(", ")}`
-        : "No task could be started.",
+  };
+
+  if (mode !== "race") {
+    return {
+      ...batchResult,
+      nextStep:
+        jobs.length > 0
+          ? `Supervise with waitAll on these sessionIDs: ${jobs.map((j) => j.sessionID).join(", ")}`
+          : "No task could be started.",
+    };
+  }
+  if (jobs.length === 0) {
+    return { ...batchResult, mode, winner: null, aborted: [], note: "No task could be started." };
+  }
+
+  // ---- race supervision: first clean idle wins, the rest get aborted ----
+  const RACE_SLICE_SEC = 15;
+  const globalDeadline = Date.now() + (args.timeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC) * 1000;
+  let winner = null;
+  while (winner === null && Date.now() < globalDeadline) {
+    const sliceRemaining = Math.max(1, Math.ceil((globalDeadline - Date.now()) / 1000));
+    const slice = await Promise.all(
+      jobs.map((j) =>
+        toolWait({
+          sessionID: j.sessionID,
+          cwd,
+          timeoutSec: Math.min(RACE_SLICE_SEC, sliceRemaining),
+        })
+      )
+    );
+    // Deterministic pick: lowest index that finished cleanly in this slice.
+    const cleanIdx = slice.findIndex((r) => r.status === "idle" && !r.error);
+    if (cleanIdx >= 0) {
+      winner = { ...jobs[cleanIdx], outcome: slice[cleanIdx] };
+      break;
+    }
+    // Everyone blocked on permissions or finished with errors: nobody can win
+    // without external help — stop early instead of burning the deadline.
+    const terminal = (r) => r.status === "idle" || r.status === "needsInput";
+    if (slice.every(terminal)) break;
+  }
+
+  const aborted = [];
+  for (const j of jobs) {
+    if (winner && j.sessionID === winner.sessionID) continue;
+    try {
+      await toolAbort({ sessionID: j.sessionID, cwd });
+      markJobBySession(cwd, j.sessionID, () => ({ cancelledReason: winner ? "race-loser" : "race-no-winner" }));
+      aborted.push({ sessionID: j.sessionID, jobId: j.jobId, index: j.index });
+    } catch {
+      // already idle/terminal: nothing to abort
+    }
+  }
+
+  if (!winner) {
+    return {
+      ...batchResult,
+      mode,
+      winner: null,
+      aborted,
+      note:
+        aborted.length > 0
+          ? "Race ended without a clean winner (blocked on permissions or errors); losers aborted."
+          : "Race deadline hit before any task finished; sessions were NOT aborted — supervise with waitAll.",
+      ...(aborted.length === 0
+        ? { nextStep: `Supervise with waitAll on these sessionIDs: ${jobs.map((j) => j.sessionID).join(", ")}` }
+        : {}),
+    };
+  }
+
+  return {
+    ...batchResult,
+    mode,
+    winner: {
+      jobId: winner.jobId,
+      sessionID: winner.sessionID,
+      index: winner.index,
+      account: winner.account,
+      response: winner.outcome.response ?? null,
+      cost: winner.outcome.cost ?? null,
+    },
+    aborted,
+    nextStep: `Winner session ${winner.sessionID} completed its task; verify its artifacts yourself.`,
   };
 }
 
@@ -458,6 +584,7 @@ async function toolWait(args) {
     // Pending permissions for this session surface as needsInput (RF-19)
     const pending = watcher.pendingList(args.sessionID);
       if (pending.length > 0) {
+        const progress = await fetchAssistantOutcome(client, args.sessionID).catch(() => null);
         return {
           status: "needsInput",
           sessionID: args.sessionID,
@@ -470,6 +597,9 @@ async function toolWait(args) {
           command: p.metadata?.command ?? null,
           suggestedAlways: p.always ?? [],
         })),
+        ...(progress?.text
+          ? { progress: { tail: progress.text.slice(-300), todos: await summarizeTodos(client, args.sessionID) } }
+          : {}),
       };
     }
 
@@ -490,7 +620,7 @@ async function toolWait(args) {
 
         // Auto-retry (one shot per original delegation): re-delegate the same
         // task at the escalation-suggested model/variant.
-        if (esc?.retryable && job?.autoRetry && !job.autoRetriedAs && retryChainDepth(cwd, job) < 2) {
+        if (esc?.retryable && job?.autoRetry && !job.autoRetriedAs && retryChainDepth(cwd, job) < maxAutoRetries(loadConfig())) {
           try {
             const retried = await toolDelegate({
               task: job.task ?? args.task ?? undefined,
@@ -573,6 +703,17 @@ async function toolWait(args) {
       watcher.waitForIdle(args.sessionID, WAIT_POLL_INTERVAL_MS).catch(() => false),
     ]);
   }
+}
+
+/**
+ * Configurable auto-retry chain budget (config.retryPolicy.maxAutoRetries,
+ * default 2). Values below 1 fall back to the default.
+ * @param {object} config
+ * @returns {number}
+ */
+function maxAutoRetries(config) {
+  const v = config?.retryPolicy?.maxAutoRetries;
+  return Number.isFinite(v) && v >= 1 ? Math.floor(v) : 2;
 }
 
 /**
@@ -956,14 +1097,16 @@ const TOOLS = [
       type: "object",
       required: ["tasks"],
       properties: {
-        tasks: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 12, description: "Up to 12 full task descriptions (goal, scope, verifiable criteria)" },
+        tasks: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 12, description: "Task descriptions (same model+effort each)" },
+        mode: { type: "string", enum: ["batch", "race"], description: "batch (default): return immediately, supervise with waitAll. race: first task to finish cleanly wins, all others are aborted to save quota" },
+        timeoutSec: { type: "number", description: "race mode shared deadline seconds (default 600)" },
         cwd: { type: "string", description: "Workspace directory" },
         model: { type: "string", description: "Explicit model id (overrides tier)" },
         tier: { type: "number", description: "Tier 0-3 when no explicit model" },
         effort: { type: "string", enum: ["off", "high", "max"], description: "Effort request; default from effortPolicy" },
-        account: { type: "string", description: '"auto" (default, round-robin rotates across accounts) or explicit name' },
-        agent: { type: "string", description: "OpenCode agent (default build)" },
-        titlePrefix: { type: "string", description: 'Session title prefix (default "Fanout")' },
+        account: { type: "string", description: 'OpenCode account for quota routing ("auto" default round-robin)' },
+        agent: { type: "string", description: "OpenCode agent (default oc-delegate when injected, else build)" },
+        titlePrefix: { type: "string", description: "Session title prefix (default Fanout)" },
       },
     },
   },

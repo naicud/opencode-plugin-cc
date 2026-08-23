@@ -188,3 +188,56 @@ export function renderSetup(status) {
 
   return lines.join("\n");
 }
+
+/**
+ * Render a cost snapshot as human-readable text.
+ * @param {{ count: number, total: number, today: number, byDay: Record<string, number>, byModel: Record<string, number>, byAccount: Record<string, number>, limits: {maxJobCostUsd?: number, maxDailyCostUsd?: number}|null }} snapshot
+ * @returns {string}
+ */
+export function renderCost(snapshot) {
+  const lines = [];
+  const fmt = (n) => `$${Number(n ?? 0).toFixed(6)}`;
+  const mapLine = (map) =>
+    Object.entries(map)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `${k}=${fmt(v)}`)
+      .join(" · ");
+
+  lines.push("## Delegation Cost Report\n");
+  if (!snapshot.count) {
+    lines.push("No completed delegation jobs with recorded cost yet.");
+    return lines.join("\n");
+  }
+
+  lines.push(`- **Total spend**: ${fmt(snapshot.total)} across ${snapshot.count} completed job(s)`);
+  lines.push(`- **Today (UTC)**: ${fmt(snapshot.today)}`);
+  if (snapshot.byModel && Object.keys(snapshot.byModel).length > 0) {
+    lines.push(`- **By model**: ${mapLine(snapshot.byModel)}`);
+  }
+  if (snapshot.byAccount && Object.keys(snapshot.byAccount).length > 1) {
+    lines.push(`- **By account**: ${mapLine(snapshot.byAccount)}`);
+  }
+
+  const limits = snapshot.limits ?? {};
+  const limitBits = [];
+  limitBits.push(
+    limits.maxJobCostUsd != null ? `per-job ${fmt(limits.maxJobCostUsd)}` : "per-job unset"
+  );
+  limitBits.push(
+    limits.maxDailyCostUsd != null ? `daily ${fmt(limits.maxDailyCostUsd)}` : "daily unset"
+  );
+  lines.push(`- **Budget limits**: ${limitBits.join(", ")}`);
+  if (limits.maxDailyCostUsd != null) {
+    const remaining = Math.max(0, limits.maxDailyCostUsd - snapshot.today);
+    lines.push(`- **Remaining today**: ${fmt(remaining)}`);
+  }
+
+  const days = Object.entries(snapshot.byDay ?? {}).sort();
+  if (days.length > 0) {
+    lines.push("\n### By day (UTC)\n");
+    for (const [day, cost] of days.slice(-14)) {
+      lines.push(`- ${day}: ${fmt(cost)}`);
+    }
+  }
+  return lines.join("\n");
+}

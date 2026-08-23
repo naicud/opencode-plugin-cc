@@ -2,6 +2,7 @@
 
 import { tailLines } from "./fs.mjs";
 import { jobLogPath } from "./state.mjs";
+import { computeSpend, summarizeBudget } from "../../mcp/lib/budget.mjs";
 
 /**
  * Sort jobs newest first by updatedAt.
@@ -165,4 +166,44 @@ function formatDuration(ms) {
   const h = Math.floor(m / 60);
   const rm = m % 60;
   return `${h}h ${rm}m`;
+}
+
+/**
+ * Build a cost-report snapshot from persisted delegate jobs.
+ * Uses the same pure budget helpers as the MCP runtime (computeSpend /
+ * summarizeBudget), filtered to completed delegate jobs with a cost field.
+ * @param {object[]} jobs - state.json job records
+ * @param {object|null} [config] - parsed models.json (for budget limits)
+ * @param {{ now?: Date }} [opts]
+ */
+export function buildCostSnapshot(jobs, config = null, opts = {}) {
+  const delegateJobs = (Array.isArray(jobs) ? jobs : []).filter(
+    (j) => j?.type === "delegate" && j?.status === "completed"
+  );
+  const spend = computeSpend(delegateJobs, { now: opts.now });
+
+  const byModel = {};
+  const byAccount = {};
+  for (const job of delegateJobs) {
+    const cost = Number(job.cost);
+    if (!Number.isFinite(cost)) continue;
+    const model = typeof job.model === "string" && job.model ? job.model : "unknown";
+    byModel[model] = round6((byModel[model] ?? 0) + cost);
+    const account = typeof job.account === "string" && job.account ? job.account : "default";
+    byAccount[account] = round6((byAccount[account] ?? 0) + cost);
+  }
+
+  return {
+    count: delegateJobs.length,
+    total: spend.total,
+    today: spend.today,
+    byDay: spend.byDay,
+    byModel,
+    byAccount,
+    limits: summarizeBudget(config, delegateJobs, { now: opts.now })?.limits ?? null,
+  };
+}
+
+function round6(n) {
+  return Number.isFinite(n) ? Number(n.toFixed(6)) : 0;
 }

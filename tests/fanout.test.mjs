@@ -60,6 +60,26 @@ test("blank titlePrefix → TITLE_PREFIX_INVALID", async () => {
   assert.equal(r.payload.code, "TITLE_PREFIX_INVALID");
 });
 
+test("invalid mode → MODE_INVALID", async () => {
+  // null/undefined are legal: they mean the default "batch"
+  for (const mode of ["nope", 5, "", ["race"], { mode: "race" }]) {
+    const r = await call({ tasks: ["ok"], mode });
+    assert.equal(r.isError, true, `mode=${JSON.stringify(mode)}`);
+    assert.equal(r.payload.code, "MODE_INVALID");
+  }
+});
+
+test("valid explicit mode passes shape validation", async () => {
+  for (const mode of ["batch", "race"]) {
+    const tasks = Array.from({ length: 12 }, (_, i) => `task ${i}`);
+    const r = await call({ tasks, mode });
+    // Same trick as the 12-task case: DELEGATE_LIMIT_EXCEEDED proves the
+    // mode check itself accepted a legal value.
+    assert.equal(r.isError, true, `mode=${mode}`);
+    assert.equal(r.payload.code, "DELEGATE_LIMIT_EXCEEDED");
+  }
+});
+
 test("12 tasks pass validation (fails later at cap/catalog, not on shape)", async () => {
   const tasks = Array.from({ length: 12 }, (_, i) => `task ${i}`);
   const r = await call({ tasks });
