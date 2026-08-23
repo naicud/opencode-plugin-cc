@@ -33,6 +33,64 @@ import { loadState, upsertJob, stateBase, generateJobId } from "../scripts/lib/s
 const PROTOCOL_VERSION = "2024-11-05";
 const WAIT_POLL_INTERVAL_MS = 5000;
 const DEFAULT_WAIT_TIMEOUT_SEC = 600;
+// MCP progress notifications: long waits (wait/waitAll/fanOut-race) stream
+// live updates when the caller supplies params._meta.progressToken. Interval
+// override exists for tests/e2e; default keeps stdout quiet.
+const PROGRESS_INTERVAL_MS_DEFAULT = 15_000;
+
+let progressNotifier = null;
+
+/**
+ * Register the stdout writer used for notifications/progress frames.
+ * Called once from main(); direct-import tests leave it unset (emitters no-op).
+ * @param {(msg: object) => void} [fn]
+ */
+export function setProgressNotifier(fn) {
+  progressNotifier = typeof fn === "function" ? fn : null;
+}
+
+/**
+ * Build a throttled progress emitter for one tool call.
+ * @param {object|undefined} meta - request params._meta ({progressToken})
+ * @param {{ totalSec?: number }} [opts]
+ * @returns {((message: string) => boolean)|null} emits or null when disabled
+ */
+export function buildProgressEmitter(meta, opts = {}) {
+  const token = meta?.progressToken;
+  if (!token || !progressNotifier) return null;
+  const total = Number.isFinite(opts.totalSec) ? Math.max(1, Math.round(opts.totalSec)) : undefined;
+  const envInterval = Number(process.env.OPENCODE_PROGRESS_INTERVAL_MS);
+  const intervalMs =
+    Number.isFinite(envInterval) && envInterval >= 250
+      ? envInterval
+      : PROGRESS_INTERVAL_MS_DEFAULT;
+  const startedAt = Date.now();
+  let lastSent = 0;
+  return (message) => {
+    const now = Date.now();
+    if (now - lastSent < intervalMs) return false;
+    lastSent = now;
+    const elapsedSec = Math.round((now - startedAt) / 1000);
+    try {
+      progressNotifier({
+        jsonrpc: "2.0",
+        method: "notifications/progress",
+        params: {
+          progressToken: token,
+          ...(total !== undefined ? { total, progress: Math.min(total, elapsedSec) } : { progress: elapsedSec }),
+          message: String(message).slice(0, 400),
+        },
+      });
+      return true;
+    } catch {
+      return false; // a broken notifier must never kill a supervision loop
+    }
+  };
+}
+
+function shortId(sessionID) {
+  return typeof sessionID === "string" ? sessionID.slice(0, 8) : "?";
+}
 
 /** @type {Map<string, { client: object, watcher: object }>} keyed by baseUrl */
 const connections = new Map();
@@ -219,7 +277,7 @@ async function toolDelegate(args) {
     catalogModels,
     config
   );
-  const selector = buildModelSelector(config.provider, selection.model.id, selection.variant);
+  const selector = buildModelSelector(selection.model.provider ?? config.provider, selection.model.id, selection.variant);
 
   const conn = await getConnection(cwd, account);
   const { client } = conn;
@@ -283,7 +341,7 @@ async function toolDelegate(args) {
     sessionID,
     jobId: job.id,
     account,
-    modelRef: `${config.provider}/${selection.model.id}`,
+    modelRef: `${selection.model.provider ?? config.provider}/${selection.model.id}`,
     variant: selection.variant ?? null,
     effortApplied: selection.effortApplied,
     reason: selection.reason ?? null,
@@ -308,7 +366,7 @@ async function toolDelegate(args) {
  * WITHOUT an assistant error wins; every other session is aborted (jobs marked
  * cancelled as race-loser) so losers stop burning quota immediately.
  */
-async function toolFanOut(args) {
+async function toolFanOut(args, meta) {
   if (!Array.isArray(args.tasks) || args.tasks.length === 0) {
     throw Object.assign(new Error('fanOut requires a non-empty "tasks" string array'), {
       code: "TASKS_REQUIRED",
@@ -371,7 +429,7 @@ async function toolFanOut(args) {
     catalogModels,
     config
   );
-  const selector = buildModelSelector(config.provider, selection.model.id, selection.variant);
+  const selector = buildModelSelector(selection.model.provider ?? config.provider, selection.model.id, selection.variant);
   const firstConn = await getConnection(cwd, firstAccount);
   const agent = args.agent ?? config.defaults?.agent ?? (await resolveDelegationAgent(firstConn));
   const prefix = (
@@ -437,7 +495,7 @@ async function toolFanOut(args) {
     started: jobs.length,
     failed,
     jobs,
-    modelRef: `${config.provider}/${selection.model.id}`,
+    modelRef: `${selection.model.provider ?? config.provider}/${selection.model.id}`,
     variant: selection.variant ?? null,
     effortApplied: selection.effortApplied,
   };
@@ -457,6 +515,7 @@ async function toolFanOut(args) {
 
   // ---- race supervision: first clean idle wins, the rest get aborted ----
   const RACE_SLICE_SEC = 15;
+  const raceEmit = buildProgressEmitter(meta, { totalSec: args.timeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC });
   const globalDeadline = Date.now() + (args.timeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC) * 1000;
   let winner = null;
   while (winner === null && Date.now() < globalDeadline) {
@@ -480,6 +539,10 @@ async function toolFanOut(args) {
     // without external help — stop early instead of burning the deadline.
     const terminal = (r) => r.status === "idle" || r.status === "needsInput";
     if (slice.every(terminal)) break;
+    raceEmit?.(
+      `race ${jobs.length} runners — ${slice.filter((r) => r.status === "timeout").length} still working; ` +
+        jobs.map((j, i2) => `${shortId(j.sessionID)}: ${slice[i2]?.status ?? "?"}`).join(", ")
+    );
   }
 
   const aborted = [];
@@ -574,11 +637,13 @@ async function summarizeTodos(client, sessionId) {
   }
 }
 
-async function toolWait(args) {
+async function toolWait(args, meta) {
   const cwd = args.cwd ?? process.cwd();
   const account = accountForSession(cwd, args.sessionID);
   const { client, watcher } = await getConnection(cwd, account);
-  const deadline = Date.now() + (args.timeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC) * 1000;
+  const timeoutSec = args.timeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC;
+  const emit = buildProgressEmitter(meta, { totalSec: timeoutSec });
+  const deadline = Date.now() + timeoutSec * 1000;
   const job = (loadState(cwd).jobs ?? []).find((j) => j.sessionID === args.sessionID);
 
   for (;;) {
@@ -703,6 +768,10 @@ async function toolWait(args) {
       new Promise((r) => setTimeout(r, WAIT_POLL_INTERVAL_MS)),
       watcher.waitForIdle(args.sessionID, WAIT_POLL_INTERVAL_MS).catch(() => false),
     ]);
+
+    // Live progress frame (only when the caller passed a progressToken):
+    // latest streamed assistant text straight from the SSE part tracker.
+    emit?.(`waiting ${shortId(args.sessionID)} — ${watcher.assistantText(args.sessionID).replace(/\s+/g, " ").trim().slice(-200) || "no assistant output yet"}`);
   }
 }
 
@@ -792,7 +861,7 @@ async function toolStatus(args) {
   };
 }
 
-async function toolWaitAll(args) {
+async function toolWaitAll(args, meta) {
   const ids = Array.isArray(args.sessionIDs) ? args.sessionIDs : [];
   if (ids.length === 0 || ids.some((s) => typeof s !== "string" || !s.trim())) {
     throw Object.assign(new Error('waitAll requires a non-empty "sessionIDs" string array'), {
@@ -807,7 +876,7 @@ async function toolWaitAll(args) {
   }
   const results = await Promise.all(
     ids.map((sessionID) =>
-      toolWait({ ...args, sessionID }).catch((err) => ({
+      toolWait({ ...args, sessionID }, meta).catch((err) => ({
         status: "error",
         sessionID,
         error: err?.message ?? String(err),
@@ -1299,7 +1368,7 @@ export async function handleRpcMessage(msg) {
       return null;
     }
     try {
-      const result = await handler(args ?? {});
+      const result = await handler(args ?? {}, msg.params?._meta);
       return rpcResult(msg.id, {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         isError: false,
@@ -1332,6 +1401,7 @@ export async function handleRpcMessage(msg) {
 }
 
 async function main() {
+  setProgressNotifier(writeMessage);
   const rl = readline.createInterface({ input: process.stdin, terminal: false });
   rl.on("line", (line) => {
     const trimmed = line.trim();

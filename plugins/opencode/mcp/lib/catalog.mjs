@@ -258,9 +258,12 @@ export function mergeCatalogs(config, liveModels, opts = {}) {
   }
 
   // Present in file but absent from live catalog: keep curated metadata, flag unavailability (RF-5)
+  // Entries bound to a DIFFERENT provider than config.provider never appear in this
+  // provider's live catalog; keep them selectable and let the runtime validate.
   for (const fileEntry of config.models ?? []) {
     if (seen.has(fileEntry.id)) continue;
-    models.push({ ...fileEntry, available: false });
+    const foreignProvider = fileEntry.provider != null && fileEntry.provider !== config.provider;
+    models.push({ ...fileEntry, available: foreignProvider ? true : false });
   }
 
   return { models, excluded: config.excluded ?? [] };

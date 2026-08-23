@@ -866,6 +866,17 @@
       }
     },
     {
+      "id": "ox-alpha-free",
+      "provider": "opencode-go",
+      "tier": 0,
+      "use": "ox-alpha on OpenCode Go; same model family as x-preview-f-free, separate provider credential (opencode auth login -> OpenCode Go)",
+      "variants": [],
+      "cost": {
+        "input": 0,
+        "output": 0
+      }
+    },
+    {
       "id": "x-preview-f-free",
       "tier": 0,
       "use": "default workhorse; free ox-alpha model, full coding capability",

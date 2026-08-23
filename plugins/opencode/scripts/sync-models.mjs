@@ -15,7 +15,7 @@ import { ensureServer } from "./lib/opencode-server.mjs";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(__dirname, "..", "config", "models.json");
 const PROVIDER_ID = "opencode";
-const CURATED_FIELDS = ["tier", "use", "default", "offPeakOnly"];
+const CURATED_FIELDS = ["tier", "use", "default", "offPeakOnly", "provider"];
 
 /**
  * Parse `opencode models <provider> --verbose` output.
