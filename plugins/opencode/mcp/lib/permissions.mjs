@@ -9,6 +9,7 @@
 // (permission/patterns/metadata/always/tool).
 
 import { consumeSseStream } from "../../scripts/lib/opencode-server.mjs";
+import { createPartTracker } from "./part-tracker.mjs";
 
 const RECONNECT_DELAY_MS = 2000; // RF-18
 
@@ -71,6 +72,7 @@ export function createPermissionWatcher(opts) {
   const pending = new Map();
   /** @type {Map<string, Set<() => void>>} sessionID -> idle waiters */
   const idleWaiters = new Map();
+  const partTracker = createPartTracker();
   let running = false;
   let loopPromise = null;
 
@@ -117,6 +119,7 @@ export function createPermissionWatcher(opts) {
     handleEvent(event);
     handleReply(event);
     handleIdle(event);
+    partTracker.handleEvent(event);
   }
 
   async function loop() {
@@ -150,6 +153,13 @@ export function createPermissionWatcher(opts) {
       for (const set of idleWaiters.values()) set.clear();
       idleWaiters.clear();
       await loopPromise;
+    },
+    /**
+     * Latest accumulated assistant text for a session, from live
+     * message.part.updated SSE events ("" when nothing streamed yet).
+     */
+    assistantText(sessionID) {
+      return partTracker.assistantText(sessionID);
     },
     /**
      * Resolve true as soon as a session.idle SSE event arrives for the given

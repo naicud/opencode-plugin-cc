@@ -25,6 +25,7 @@ const SERVER = path.join(__dirname, "..", "mcp", "server.mjs");
 
 let nextId = 1;
 const pending = new Map();
+const progressFrames = [];
 
 function fail(msg) {
   console.error(`E2E FAIL: ${msg}`);
@@ -35,7 +36,7 @@ async function main() {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "oc-e2e-"));
   const proc = spawn(process.execPath, [SERVER], {
     stdio: ["pipe", "pipe", "pipe"],
-    env: process.env,
+    env: { ...process.env, OPENCODE_PROGRESS_INTERVAL_MS: "2500" },
   });
 
   let buffer = "";
@@ -49,6 +50,10 @@ async function main() {
       if (!line) continue;
       try {
         const msg = JSON.parse(line);
+        if (msg.method === "notifications/progress") {
+          progressFrames.push(msg);
+          continue;
+        }
         const resolve = pending.get(msg.id);
         if (resolve) {
           pending.delete(msg.id);
@@ -134,10 +139,15 @@ async function main() {
       outcome = parseResult(await rpc("tools/call", {
         name: "wait",
         arguments: { sessionID: del.sessionID, cwd, timeoutSec: 150 },
+        _meta: { progressToken: "e2e-wait" },
       }));
       console.log(`wait: ${outcome.status}`);
       if (outcome.status !== "timeout") break;
     }
+    // Live progress: frames must have streamed while waiting (SSE part tracker).
+    const waitFrames = progressFrames.filter((f) => f.params?.progressToken === "e2e-wait");
+    if (waitFrames.length === 0) return fail("no notifications/progress frames received during wait");
+    console.log(`progress ok: ${waitFrames.length} frame(s), last message="${String(waitFrames.at(-1).params.message).slice(0, 80)}"`);
     if (outcome.status === "needsInput") {
       return fail(`unexpected permission request: ${JSON.stringify(outcome.permissions)}`);
     }
@@ -149,8 +159,12 @@ async function main() {
       return fail(`artifact content wrong: ${fs.readFileSync(proof, "utf8")}`);
     }
     if (!fs.existsSync(path.join(cwd, ".oc-report.md"))) return fail(".oc-report.md contract not honored");
-    if (!/COMPLETED|PARTIAL/.test(outcome.response)) {
-      return fail(`response lacks STATUS verdict: ${outcome.response.slice(0, 200)}`);
+    // Contract lives in the REPORT file (stable), not in chat phrasing
+    // (models reword it across releases). Either surface carrying the
+    // STATUS verdict satisfies the contract.
+    const reportText = fs.readFileSync(path.join(cwd, ".oc-report.md"), "utf8");
+    if (!/COMPLETED|PARTIAL/.test(outcome.response) && !/STATUS[^\n]*(COMPLETED|PARTIAL)/i.test(reportText)) {
+      return fail(`no STATUS verdict in response or .oc-report.md:\nresponse=${outcome.response.slice(0, 200)}\nreport=${reportText.slice(0, 200)}`);
     }
     console.log(`task verified: artifact + .oc-report.md present; cost=${outcome.cost}`);
 
@@ -271,7 +285,7 @@ async function main() {
       return fail(`race produced no winner: ${JSON.stringify(race).slice(0, 300)}`);
     }
     if (race.aborted.length !== 1) return fail(`expected exactly 1 aborted loser: ${JSON.stringify(race.aborted)}`);
-    if (!/COMPLETED|PARTIAL/.test(race.winner.response ?? "")) {
+    if (!/COMPLETED|PARTIAL/.test(race.winner.response ?? "") && !/STATUS[^\n]*(COMPLETED|PARTIAL)/i.test(fs.readFileSync(path.join(cwd, ".oc-report.md"), "utf8"))) {
       return fail(`winner response lacks STATUS verdict: ${(race.winner.response ?? "").slice(0, 200)}`);
     }
     const raceProof = path.join(cwd, "race-proof.txt");

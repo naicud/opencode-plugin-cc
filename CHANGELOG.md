@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **Live progress streaming**: `wait`, `waitAll` and `fanOut` (race mode) emit MCP
+  `notifications/progress` frames when the caller supplies `_meta.progressToken`. Frames carry the
+  latest assistant output captured from live `message.part.updated` SSE events via a new rolling
+  part tracker (`mcp/lib/part-tracker.mjs`). Interval configurable with
+  `OPENCODE_PROGRESS_INTERVAL_MS` (default 15000 ms).
+
 ## [1.7.1] - 2026-08-23
 
 ### Fixed
