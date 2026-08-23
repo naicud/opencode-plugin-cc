@@ -36,7 +36,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__plugin_opencode_oc__(wait|status)",
+        "matcher": "mcp__plugin_opencode_oc__(wait|waitAll|status)",
         "hooks": [
           {
             "type": "command",

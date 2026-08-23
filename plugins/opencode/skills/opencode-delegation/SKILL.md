@@ -42,7 +42,8 @@ The delegation contract (config/models.json) is prepended automatically: it rest
 ## Supervision Loop
 
 - `delegate` → save sessionID/jobId
-- `wait` until idle / needsInput / timeout (600s per call)
+- `wait` until idle / needsInput / timeout (600s per call); for parallel fan-outs use
+  `waitAll` with up to 12 sessionIDs (shared deadline, one result + summary each)
 - `needsInput`: approve only safe read/test commands (`respond once`); reject git push/commit, rm -rf, sudo, curl-to-shell
 - two consecutive timeouts → `abort`
 - failed with retryable error → follow the `escalation` object: re-delegate at `suggestModel` + `suggestVariant`, passing `retryOf: <failed jobId>`

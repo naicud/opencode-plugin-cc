@@ -355,6 +355,28 @@ async function toolWait(args) {
 
 async function toolStatus(args) {
   const cwd = args.cwd ?? process.cwd();
+  // Batch mode: no sessionID → recent delegate jobs overview.
+  if (!args.sessionID) {
+    const jobs = (loadState(cwd).jobs ?? [])
+      .filter((j) => j.type === "delegate")
+      .sort((a, b) => new Date(b.updatedAt ?? b.createdAt).getTime() - new Date(a.updatedAt ?? a.createdAt).getTime())
+      .slice(0, 20)
+      .map((j) => ({
+        id: j.id,
+        status: j.status,
+        sessionID: j.sessionID ?? null,
+        model: j.model ?? null,
+        variant: j.variant ?? null,
+        account: j.account ?? null,
+        tier: j.tier ?? null,
+        retryOf: j.retryOf ?? null,
+        resumedFrom: j.resumedFrom ?? null,
+        errorMessage: j.errorMessage ?? null,
+        createdAt: j.createdAt ?? null,
+        completedAt: j.completedAt ?? null,
+      }));
+    return { jobs };
+  }
   const client = await getClient(cwd, accountForSession(cwd, args.sessionID));
   // RF-11: any failing sub-endpoint becomes null, the tool itself must not fail.
   const [statuses, todo, diff, messages] = await Promise.all([
@@ -382,6 +404,41 @@ async function toolStatus(args) {
               .join("\n"),
           }
         : null,
+  };
+}
+
+async function toolWaitAll(args) {
+  const ids = Array.isArray(args.sessionIDs) ? args.sessionIDs : [];
+  if (ids.length === 0 || ids.some((s) => typeof s !== "string" || !s.trim())) {
+    throw Object.assign(new Error('waitAll requires a non-empty "sessionIDs" string array'), {
+      code: "SESSION_IDS_REQUIRED",
+    });
+  }
+  const MAX_PARALLEL_WAITS = 12;
+  if (ids.length > MAX_PARALLEL_WAITS) {
+    throw Object.assign(new Error(`waitAll supports at most ${MAX_PARALLEL_WAITS} sessions per call`), {
+      code: "SESSION_IDS_TOO_MANY",
+    });
+  }
+  const results = await Promise.all(
+    ids.map((sessionID) =>
+      toolWait({ ...args, sessionID }).catch((err) => ({
+        status: "error",
+        sessionID,
+        error: err?.message ?? String(err),
+      }))
+    )
+  );
+  return {
+    sessionIDs: ids,
+    results,
+    summary: {
+      total: results.length,
+      idle: results.filter((r) => r.status === "idle").length,
+      needsInput: results.filter((r) => r.status === "needsInput").length,
+      timeout: results.filter((r) => r.status === "timeout").length,
+      error: results.filter((r) => r.status === "error").length,
+    },
   };
 }
 
@@ -457,15 +514,30 @@ const TOOLS = [
     },
   },
   {
-    name: "status",
-    title: "Session snapshot",
-    description: "Non-blocking snapshot of a delegated session: state, todos, diff, last message. Failing sub-endpoints return null instead of erroring.",
+    name: "waitAll",
+    title: "Wait for sessions",
+    description:
+      "Wait for MULTIPLE delegated sessions in parallel until each goes idle, needs input, or the shared timeout expires. Returns per-session outcomes plus counts.",
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
-      required: ["sessionID"],
+      required: ["sessionIDs"],
       properties: {
-        sessionID: { type: "string" },
+        sessionIDs: { type: "array", items: { type: "string" }, description: "Up to 12 session ids" },
+        cwd: { type: "string", description: "Workspace directory" },
+        timeoutSec: { type: "number", description: "Default 600 (shared deadline)" },
+      },
+    },
+  },
+  {
+    name: "status",
+    title: "Session snapshot",
+    description: "Non-blocking snapshot of a delegated session (state, todos, diff, last message). WITHOUT sessionID: lists recent delegate jobs with status/model/account. Failing sub-endpoints return null instead of erroring.",
+    annotations: { readOnlyHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionID: { type: "string", description: "Omit to list recent delegate jobs instead" },
         cwd: { type: "string", description: "Workspace directory" },
       },
     },
@@ -505,6 +577,7 @@ const TOOL_HANDLERS = {
   models: toolModels,
   delegate: toolDelegate,
   wait: toolWait,
+  waitAll: toolWaitAll,
   status: toolStatus,
   respond: toolRespond,
   abort: toolAbort,

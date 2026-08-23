@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.0] - 2026-08-23
+
+### Added
+- **`waitAll` parallel supervision**: wait on up to 12 delegated sessions with one call
+  (shared deadline, per-session results, aggregate summary `{total, idle, needsInput,
+  timeout, error}`) — fan-out delegations no longer need sequential polling.
+- **`status` batch mode**: called without `sessionID`, returns the 20 most recent delegate
+  jobs (model, variant, account, tier, retry/resume lineage, error message, timestamps).
+- **Cost table in `models`**: USD per Mtok input/output for every classified tier, free models
+  marked as `free`.
+- **`delegate` title override**: optional `title` argument names the OpenCode session
+  explicitly instead of deriving it from the task.
+
+### Changed
+- PostToolUse hook now also reacts to `waitAll`; README restructured (architecture diagrams,
+  upstream comparison, ownership statement).
+
 ## [1.2.0] - 2026-08-23
 
 ### Added

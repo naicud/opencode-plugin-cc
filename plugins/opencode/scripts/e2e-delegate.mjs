@@ -99,7 +99,7 @@ async function main() {
     /* 2. tools/list */
     const list = await rpc("tools/list", {});
     const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-    if (JSON.stringify(names) !== JSON.stringify(["abort", "delegate", "models", "respond", "status", "wait"])) {
+    if (JSON.stringify(names) !== JSON.stringify(["abort", "delegate", "models", "respond", "status", "wait", "waitAll"])) {
       return fail(`tools/list mismatch: ${names}`);
     }
     console.log("tools/list ok:", names.join(", "));

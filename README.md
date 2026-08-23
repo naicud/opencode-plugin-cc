@@ -21,7 +21,7 @@ they already have.
 - `/opencode:review` for a normal read-only OpenCode review
 - `/opencode:adversarial-review` for a steerable challenge review
 - `/opencode:rescue`, `/opencode:status`, `/opencode:result`, and `/opencode:cancel` to delegate work and manage background jobs
-- `/opencode:delegate` plus the `mcp__plugin_opencode_oc__*` MCP tools (`models`, `delegate`, `wait`, `status`, `respond`, `abort`) for tiered, budget-aware delegation to OpenCode Zen models
+- `/opencode:delegate` plus **seven MCP tools** (`models`, `delegate`, `wait`, `waitAll`, `status`, `respond`, `abort`) reachable as `mcp__plugin_opencode_oc__*` for tiered, budget-aware, multi-account delegation to OpenCode models with full supervision (permissions, escalation, retry chains, session resume)
 
 ## Requirements
 
@@ -81,17 +81,36 @@ To check your configured providers:
 /reload-plugins
 ```
 
-## Command Mapping (codex-plugin-cc -> opencode-plugin-cc)
+## Ownership & Upstream
 
-| codex-plugin-cc | opencode-plugin-cc | Description |
+Copyright 2026 **naicud** — this repository is the canonical home of the fork (see [`NOTICE`](NOTICE)).
+The skeleton derives from [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) (© OpenAI,
+Apache-2.0); everything listed below was added on top and is documented in `NOTICE` as required by
+the Apache-2.0 license.
+
+### What this fork adds over upstream codex-plugin-cc
+
+| Capability | codex-plugin-cc | opencode-plugin-cc |
 |---|---|---|
-| `/codex:review` | `/opencode:review` | Read-only code review |
-| `/codex:adversarial-review` | `/opencode:adversarial-review` | Adversarial challenge review |
-| `/codex:rescue` | `/opencode:rescue` | Delegate tasks to external agent |
-| `/codex:status` | `/opencode:status` | Show running/recent jobs |
-| `/codex:result` | `/opencode:result` | Show finished job output |
-| `/codex:cancel` | `/opencode:cancel` | Cancel active background job |
-| `/codex:setup` | `/opencode:setup` | Check install/auth, toggle review gate |
+| Delegation runtime | companion-script review flow | **7-tool MCP server** (`models`, `delegate`, `wait`, `waitAll`, `status`, `respond`, `abort`), JSON-RPC stdio, zero npm deps |
+| Model selection | n/a | tiered catalog (4 curated models), client-side variant resolution with strict max-effort chains (no silent downgrade) |
+| Cost visibility | n/a | real USD/Mtok costs per tier + `costTable`, live merge with `/config/providers` |
+| Quota scaling | single account | **multi-account routing**: `OPENCODE_DELEGATE_KEY_<ACCOUNT>` env keys → per-account server spawn via `OPENCODE_AUTH_CONTENT`, fixed / round-robin LRU strategies, distinct ports per workspace+account |
+| Permission supervision | none | SSE watcher for `permission.v2.asked`, pending queue surfaced in `wait`, `respond once/always/reject`, auto-approve/auto-reject regexes, hot-reloaded rules |
+| Failure recovery | none | escalation hints on retryable errors (`suggestModel`/`suggestVariant`), `retryOf` job chains, `resumeSessionID` crash recovery |
+| Parallelism | sequential | **`waitAll`** shared-deadline supervision up to 12 sessions; `status` batch mode lists recent jobs |
+| Supervisor UX | manual polling | PostToolUse hook injecting completion / BLOCKED-permissions / timeout-progress / re-delegate instructions into Claude's context |
+| Quality gates | basic tests | 128 unit tests + e2e + stress suites: permission ask/deny flow, concurrency, kill-and-recover, JSON-RPC fuzz, multi-account rotation, doomed-credential escalation |
+| CI | none | GitHub Actions (Node 20 + 22 matrix, full syntax check) |
+
+### Hard-won OpenCode API facts (documented in [`docs/opencode-api-findings.md`](docs/opencode-api-findings.md))
+
+- `prompt_async` requires nested `model:{providerID,modelID}` and a **top-level** `variant`; the
+  server accepts any variant silently → client-side validation against the live catalog is mandatory.
+- `GET /session/status` lists only busy sessions; absence = idle.
+- Live permission payloads differ from the OpenAPI schema (`patterns` / `metadata.command`).
+- Killing the server mid-run records `MessageAbortedError`; recovery = re-prompt the same session id
+  (implemented as `resumeSessionID`).
 
 ## Slash Commands
 
@@ -106,14 +125,15 @@ To check your configured providers:
 
 ## Model Delegation (MCP)
 
-The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over stdio, zero npm deps) exposing six tools, reachable as `mcp__plugin_opencode_oc__models|delegate|wait|status|respond|abort`:
+The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over stdio, zero npm deps) exposing **seven tools**, reachable as `mcp__plugin_opencode_oc__models|delegate|wait|waitAll|status|respond|abort`:
 
-- **models** — merged catalog (file + live `/config/providers`) with tiers, variants, real costs, effort policy and budget hint.
-- **delegate** — resolves model+variant client-side (the server accepts any variant string and silently falls back to base — see `docs/opencode-api-findings.md` P2), creates the session, fires `prompt_async` with the work contract from `config/models.json`, records a job visible to `/opencode:status`. Extras: `retryOf` links a re-run to a failed/cancelled job (validated against job history), and `resumeSessionID` continues an existing persisted session (crash recovery / multi-step) instead of creating a new one.
-- **wait** — polls every 5s; returns on idle, on pending permission (`needsInput`), or timeout.
-- **status** — non-blocking snapshot; failing sub-endpoints become `null`, never errors.
+- **models** — merged catalog (file + live `/config/providers`) with tiers, variants, real costs (`costTable`: USD per Mtok in/out), effort policy, accounts overview and budget hint.
+- **delegate** — resolves model+variant client-side (the server accepts any variant string and silently falls back to base — see `docs/opencode-api-findings.md` P2), creates a titled session, fires `prompt_async` with the work contract from `config/models.json`, records a job visible to `status`. Extras: `retryOf` links a re-run to a failed/cancelled job, `resumeSessionID` continues an existing persisted session (crash recovery / multi-step), `account` routes quota across pooled accounts, `title` overrides the session name.
+- **wait** — polls every 5s; returns on idle, on pending permission (`needsInput`), or timeout (with `progress`: latest assistant text tail + todo counts). Responses carry `jobId`, `account` and a todo summary so no extra calls are needed.
+- **waitAll** — parallel supervision: wait on up to 12 sessions with one shared deadline; per-session results plus aggregate summary `{total, idle, needsInput, timeout, error}`.
+- **status** — with `sessionID`: non-blocking snapshot (failing sub-endpoints become `null`, never errors). Without: batch mode listing the 20 most recent delegate jobs (model, variant, account, tier, retry/resume lineage, errors, timestamps).
 - **respond** — answers a pending permission (`once` / `always` / `reject`). Auto-approve/auto-reject regexes live in `config/models.json`.
-- **abort** — kills a runaway session.
+- **abort** — kills a runaway session and marks the job cancelled.
 
 Tiers (curated in `plugins/opencode/config/models.json`; everything else enters unclassified after `npm run models:sync`):
 
@@ -135,7 +155,7 @@ Reasoning-effort variants (`high`/`max`) bill reasoning tokens as **output** tok
 ### Testing
 
 ```bash
-npm test            # unit suite (125 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, job control
+npm test            # unit suite (128 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, escalation, job control
 npm run test:e2e    # full delegation round-trip against a real opencode server (needs auth)
 npm run test:stress # permission ask/deny, concurrency, server kill+restart recovery (needs auth)
 npm run test:multiaccount # round-robin rotation across two named credentials, per-account isolation, state persistence (needs auth)
@@ -145,7 +165,7 @@ npm run models:sync [-- --live]   # refresh config/models.json from the live cat
 
 ### Delegation notifications hook
 
-A PostToolUse hook (`scripts/delegation-context-hook.mjs`) watches `wait`/`status` MCP calls and injects an `additionalContext` note into Claude's context when a delegated task finishes, blocks on a pending permission (`needsInput`), or times out — so the supervisor notices without polling manually.
+A PostToolUse hook (`scripts/delegation-context-hook.mjs`) watches `wait`/`waitAll`/`status` MCP calls and injects an `additionalContext` note into Claude's context when a delegated task finishes, blocks on a pending permission (`needsInput`), or times out — so the supervisor notices without polling manually.
 
 When a task ends with a retryable assistant error (quota exhausted, rate limit, provider 5xx), `wait` attaches an `escalation` object (`kind`, `suggestModel`, `suggestVariant`) pointing at the next configured tier, and the hook tells Claude exactly how to re-delegate — no guessing, no silent failure.
 
@@ -208,19 +228,66 @@ The script tries SSH first, then HTTPS. If both fail:
 
 ## Architecture
 
-Unlike codex-plugin-cc which uses JSON-RPC over stdin/stdout, this plugin communicates with
-OpenCode via its HTTP REST API + Server-Sent Events (SSE) for streaming. The server is automatically
-started and managed by the companion scripts.
+Unlike codex-plugin-cc which uses JSON-RPC over stdin/stdout to a Codex app-server, this plugin
+communicates with OpenCode via its HTTP REST API + Server-Sent Events (SSE) for streaming.
+The server is automatically started and managed per workspace (and per account) by the plugin.
 
+```mermaid
+flowchart LR
+    CC["Claude Code"] -->|"MCP stdio<br/>JSON-RPC 2.0"| SRV["mcp/server.mjs<br/>7 tools, zero deps"]
+    SRV --> ES["ensureServer()<br/>port = 4100 + sha256(cwd+account) % 400"]
+    ES -->|spawn detached<br/>OPENCODE_PERMISSION / _CONFIG / _AUTH_CONTENT| OC["opencode serve<br/>127.0.0.1:PORT"]
+    SRV -->|"POST /session (prompt_async)"| OC
+    OC -->|"GET /event (SSE)<br/>permission.v2.asked"| W["permission watcher"]
+    W -->|pending queue| SRV
+    CC -->|"wait / waitAll"| SRV
+    CC -.->|"PostToolUse hook"| HOOK["delegation-context-hook.mjs<br/>completion / BLOCKED / timeout / escalation"]
 ```
-codex-plugin-cc                          opencode-plugin-cc
-+----------------------+                 +------------------------+
-| JSON-RPC over stdio  |                 | HTTP REST + SSE        |
-| codex app-server     |      vs.        | opencode serve         |
-| Broker multiplexing  |                 | Native HTTP (no broker)|
-| codex CLI binary     |                 | opencode CLI binary    |
-+----------------------+                 +------------------------+
+
+### Delegation round-trip
+
+```mermaid
+sequenceDiagram
+    participant C as Claude Code
+    participant M as MCP server
+    participant O as opencode serve
+    C->>M: delegate {task, tier?, account?}
+    M->>O: POST /session (title from task)
+    M->>O: POST prompt_async {parts, model{providerID,modelID}, variant:"max"}
+    M-->>C: sessionID + jobId + modelRef + variant
+    loop every 5s until idle / needsInput / deadline
+        C->>M: wait {sessionID}
+        M->>O: GET /session/status (busy-only map)
+        O-->>M: absent = idle
+    end
+    alt pending permission
+        M-->>C: needsInput [per_* id + command]
+        C->>M: respond {once | always | reject}
+    else retryable error
+        M-->>C: error + escalation {suggestModel, suggestVariant}
+        Note over C: re-delegate with retryOf + suggested tier
+    else clean completion
+        M-->>C: response + final message (+ todos)
+        Note over C: verify .oc-report.md AND listed files
+    end
 ```
+
+### Job lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> running : delegate
+    running --> completed : idle + assistant outcome
+    running --> failed : retryable/non-retryable error
+    failed --> running : re-delegate (retryOf chain)
+    running --> cancelled : abort
+    running --> running : resume (resumeSessionID)
+    completed --> [*]
+    cancelled --> [*]
+```
+
+State lives at `$CLAUDE_PLUGIN_DATA/state/<sha256(workspace)[0:16]>/state.json` (jobs pruned to 50,
+rotation state for round-robin accounts).
 
 ## Project Structure
 

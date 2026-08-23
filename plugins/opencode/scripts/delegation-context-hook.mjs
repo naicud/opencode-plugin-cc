@@ -8,7 +8,7 @@
 
 import fs from "node:fs";
 
-const RELEVANT = /^(mcp__plugin_opencode_oc__(wait|status)|mcp__opencode_oc__(wait|status))$/;
+const RELEVANT = /^(mcp__plugin_opencode_oc__(wait|waitAll|status)|mcp__opencode_oc__(wait|waitAll|status))$/;
 
 function readStdin() {
   try {
