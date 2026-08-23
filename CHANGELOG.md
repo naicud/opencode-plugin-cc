@@ -3,7 +3,7 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.8.0] - 2026-08-23
 
 ### Added
 - **Animated demo** in README (`docs/demo.svg`): real captured run of the delegation runtime,
