@@ -15,7 +15,8 @@
         "name": "naicud"
       },
       "source": "./plugins/opencode",
-      "category": "development"
+      "category": "development",
+      "keywords": ["opencode", "delegate", "mcp", "code-review", "multi-agent", "model-catalog"]
     }
   ]
 }

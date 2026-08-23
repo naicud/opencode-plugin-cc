@@ -1,0 +1,70 @@
+# Weekly live-catalog sync: refresh config/models.json from the OpenCode
+# provider catalog and open a PR when something changed.
+#
+# Requires the repository secret OPENCODE_DELEGATE_KEY_CI (an OpenCode API key)
+# for a real authenticated catalog. Without it the job exits cleanly with a
+# notice instead of failing — forks without the secret stay green.
+
+name: models-sync
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check for CI catalog credential
+        id: cred
+        env:
+          HAS_KEY: ${{ secrets.OPENCODE_DELEGATE_KEY_CI != '' }}
+        run: echo "available=$HAS_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Skip without credential
+        if: steps.cred.outputs.available != 'true'
+        run: |
+          echo "::notice::OPENCODE_DELEGATE_KEY_CI not set — weekly catalog sync skipped."
+          echo "Add the secret to enable automatic model-catalog updates."
+
+      - name: Install opencode CLI
+        if: steps.cred.outputs.available == 'true'
+        run: npm i -g opencode-ai
+
+      - name: Sync models.json from the live catalog
+        if: steps.cred.outputs.available == 'true'
+        env:
+          OPENCODE_DELEGATE_KEY_CI: ${{ secrets.OPENCODE_DELEGATE_KEY_CI }}
+        run: node plugins/opencode/scripts/sync-models.mjs --live
+
+      - name: Open PR when the catalog changed
+        if: steps.cred.outputs.available == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "models-sync bot"
+          git config user.email "actions@github.com"
+          if git diff --quiet -- plugins/opencode/config/models.json; then
+            echo "Catalog unchanged."
+            exit 0
+          fi
+          BRANCH="models-sync/$(date +%Y%m%d)"
+          git checkout -b "$BRANCH"
+          git add plugins/opencode/config/models.json
+          git commit -m "chore(catalog): weekly sync from live opencode providers"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "chore(catalog): weekly sync from live opencode providers" \
+            --body "Automated \`npm run models:sync -- --live\` run. Curated tiers/default/excluded fields are preserved; review diffs to tier metadata before merging." \
+            --base main --head "$BRANCH"

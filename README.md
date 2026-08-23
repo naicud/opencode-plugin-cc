@@ -1,6 +1,7 @@
 # OpenCode plugin for Claude Code
 
 [![tests](https://github.com/naicud/opencode-plugin-cc/actions/workflows/test.yml/badge.svg)](https://github.com/naicud/opencode-plugin-cc/actions/workflows/test.yml)
+[![release](https://img.shields.io/github/v/release/naicud/opencode-plugin-cc)](https://github.com/naicud/opencode-plugin-cc/releases)
 ![node](https://img.shields.io/badge/node-18.18%2B-brightgreen)
 ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
 ![npm deps](https://img.shields.io/badge/npm%20deps-0-success)
@@ -164,6 +165,14 @@ npm run test:multiaccount # round-robin rotation across two named credentials, p
 npm run test:escalation  # doomed-credential run proves wait surfaces retryable errors with next-tier escalation (needs auth)
 npm run models:sync [-- --live]   # refresh config/models.json from the live catalog
 ```
+
+### Automated catalog sync
+
+A weekly workflow (`.github/workflows/models-sync.yml`, Mondays 06:00 UTC) runs
+`models:sync --live` against the real provider catalog and opens a PR when `config/models.json`
+drifts (new models, retired ids, price changes). Curated fields — tier, default, excluded — are
+always preserved. Enable it by adding an OpenCode API key as the repository secret
+`OPENCODE_DELEGATE_KEY_CI`; without the secret the job exits cleanly with a notice.
 
 ### Delegation notifications hook
 
