@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.7.1] - 2026-08-23
+
+### Fixed
+- **Windows support end-to-end**: MCP server now starts correctly on win32
+  (direct-invocation guard compares `fileURLToPath`-resolved paths instead of the
+  POSIX-only `pathname`); test runner (`scripts/test-all.mjs`) enumerates test files
+  explicitly — Node 20 on Windows does not expand globs and npm always uses cmd.exe;
+  all stdio/hook/e2e scripts spawn `process.execPath` instead of bare `node` (ENOENT-prone).
+- CI matrix fully green on ubuntu-latest + windows-latest, Node 20 and 22.
+
 ## [1.7.0] - 2026-08-23
 
 ### Added
