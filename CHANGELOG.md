@@ -6,6 +6,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Animated demo** in README (`docs/demo.svg`): real captured run of the delegation runtime,
+  regenerated via `npm run demo`.
+
+### Fixed
+- **wait no longer treats server-side retries as completion**: a transient provider failure puts
+  the session in `state.type:"retry"` (absent from the busy map); the supervisor now keeps
+  polling until it actually resumes instead of returning an empty success.
+
+### Added
 - **Live progress streaming**: `wait`, `waitAll` and `fanOut` (race mode) emit MCP
   `notifications/progress` frames when the caller supplies `_meta.progressToken`. Frames carry the
   latest assistant output captured from live `message.part.updated` SSE events via a new rolling

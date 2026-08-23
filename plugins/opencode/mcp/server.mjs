@@ -674,6 +674,16 @@ async function toolWait(args, meta) {
     const state = statuses?.[args.sessionID] ?? { type: "idle" };
     if (state.type !== "busy") {
       const outcome = await fetchAssistantOutcome(client, args.sessionID);
+      // Server-side retry (live finding): a transient provider failure puts the
+      // session in state.type==="retry" (absent from the busy map). It will
+      // resume on its own — NOT terminal; keep supervising until deadline.
+      if (outcome?.info?.state?.type === "retry") {
+        if (Date.now() >= deadline) {
+          return { status: "timeout", sessionID: args.sessionID, state: outcome.info.state };
+        }
+        await new Promise((r) => setTimeout(r, WAIT_POLL_INTERVAL_MS));
+        continue;
+      }
       // Race guard (E2E finding): right after prompt_async the session is not
       // yet marked busy AND has no assistant reply. Treat as still starting.
       if (!outcome && Date.now() < deadline - WAIT_POLL_INTERVAL_MS) {

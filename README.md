@@ -19,6 +19,11 @@ they already have.
 
 ## What You Get
 
+<p align="center">
+  <a href="docs/demo.svg"><img src="docs/demo.svg" alt="Live delegation run: catalog merge, max-effort delegate, streamed progress, artifact + report verification, clean shutdown" width="820"></a>
+</p>
+<p align="center"><sub>Real captured run — regenerate with <code>npm run demo</code>.</sub></p>
+
 - `/opencode:review` for a normal read-only OpenCode review
 - `/opencode:adversarial-review` for a steerable challenge review
 - `/opencode:rescue`, `/opencode:status`, `/opencode:result`, and `/opencode:cancel` to delegate work and manage background jobs
@@ -176,6 +181,7 @@ npm run test:stress # permission ask/deny, concurrency, server kill+restart reco
 npm run test:multiaccount # round-robin rotation across two named credentials, per-account isolation, state persistence (needs auth)
 npm run test:escalation  # doomed-credential run proves wait surfaces retryable errors with next-tier escalation (needs auth)
 npm run models:sync [-- --live]   # refresh config/models.json from the live catalog
+npm run demo        # re-run the live delegation demo and regenerate docs/demo.svg
 ```
 
 ### Automated catalog sync
