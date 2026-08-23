@@ -38,7 +38,10 @@ export function classifyAssistantError(error) {
 export function buildEscalation(error, config, modelID) {
   const base = classifyAssistantError(error);
   if (!base.retryable) return base;
-  const models = (config.models ?? []).slice().sort((a, b) => (a.tier ?? 0) - (b.tier ?? 0));
+  const excludedIds = new Set((config.excluded ?? []).map((e) => e.id));
+  const models = (config.models ?? [])
+    .filter((m) => !excludedIds.has(m.id))
+    .sort((a, b) => (a.tier ?? 0) - (b.tier ?? 0));
   const currentTier = models.find((m) => m.id === modelID)?.tier ?? config.defaults?.tier ?? 0;
   const next = models.find((m) => (m.tier ?? -Infinity) > currentTier);
   return {

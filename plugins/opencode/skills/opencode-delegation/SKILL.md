@@ -13,9 +13,11 @@ Use this skill when handing a task to an OpenCode model through the `delegate` M
 | Tier | Model | Use | Cost |
 |---|---|---|---|
 | 0 | x-preview-f-free (**default**) | Everyday implementation, tests, features | free |
-| 1 | deepseek-v4-flash | Fast paid fallback when tier 0 unavailable | low |
-| 2 | deepseek-v4-pro | Hard refactors, debugging, multi-file changes | medium |
-| 3 | kimi-k3 | Architecture rewrites, hardest problems only | high |
+
+Free-only mode is ACTIVE: all paid models are in `excluded` (config/models.json) — billing
+exhausted. Only free models are selectable: x-preview-f-free, big-pickle, hy3-free,
+mimo-v2.5-free, nemotron-3-ultra-free, nemotron-3.5-lightning-free. Do not request paid models;
+requests fail with `MODEL_EXCLUDED`.
 
 Rules:
 

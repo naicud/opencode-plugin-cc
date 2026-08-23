@@ -9,7 +9,12 @@
   "concurrency": {
     "maxDelegates": 8
   },
-  "budget": {},
+  "budget": {
+    "per5h": 12,
+    "perWeek": 30,
+    "perMonth": 60,
+    "note": "USD approssimativi sui modelli a pagamento. x-preview-f-free (tier 0) è gratuito: default per l'efficienza massima."
+  },
   "syncedAt": "2026-08-22T17:01:46.118Z",
   "defaults": {
     "tier": 0,
@@ -880,6 +885,226 @@
     {
       "id": "muse-spark-1.2-contributor-free",
       "reason": "Prompt e completion usati per addestrare modelli futuri. Vietato su codice di lavoro."
+    },
+    {
+      "id": "claude-fable-5",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "claude-opus-4-5",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "claude-opus-4-6",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "claude-opus-4-7",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "claude-opus-4-8",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "claude-opus-5",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "claude-sonnet-4",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "claude-sonnet-4-5",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "claude-sonnet-5",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gemini-3-flash",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gemini-3.1-pro",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gemini-3.5-flash",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gemini-3.5-flash-lite",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gemini-3.6-flash",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gemini-3.7-flash",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "glm-5",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "glm-5.1",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "glm-5.2",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5-codex",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5-nano",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.1",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.1-codex",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.1-codex-max",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.1-codex-mini",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.2",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.2-codex",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.3-codex",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.3-codex-spark",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.4",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.4-nano",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.4-pro",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.5",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.5-pro",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "grok-4.5",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "grok-4.6",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "grok-build-0.1",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "kimi-k2.5",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "kimi-k2.6",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "kimi-k2.7-code",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "kimi-k3",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "minimax-m2.5",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "minimax-m2.7",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "minimax-m3",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "muse-spark-1.2",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "qwen3.5-plus",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
+    },
+    {
+      "id": "qwen3.6-plus",
+      "reason": "Solo modelli gratuiti attivi (billing opencode Zen esaurito). Rimuovere da excluded per riattivare."
     }
   ],
   "permissions": {
@@ -906,11 +1131,5 @@
       "curl.*\\|.*(sh|bash)"
     ]
   },
-  "contract": "# Contratto di lavoro\n\nLavora SOLO dentro ${cwd}.\n\n## Regole operative\n- Non fare push, commit o modifiche fuori dal workspace.\n- Non toccare file elencati come fuori scope.\n- Esegui il comando di test indicato nel task prima di dichiarare completato.\n\n## Report finale (OBBLIGATORIO, mai facoltativo)\nPRIMA di dichiarare il task finito DEVI scrivere il file .oc-report.md nella root del workspace (${cwd}/.oc-report.md). Un task senza .oc-report.md è considerato INCOMPLETO. Il report contiene:\n- STATUS: COMPLETED | PARTIAL | BLOCKED (prima riga)\n- Obiettivo ripreso in una riga\n- File modificati (chiave \"files\", lista di path relativi)\n- Cosa hai fatto e perché\n- Come l'hai verificato (comando eseguito + esito)\n- Se BLOCKED: cosa ti blocca, testualmente, senza inventare dettagli\n",
-  "budget": {
-    "per5h": 12,
-    "perWeek": 30,
-    "perMonth": 60,
-    "note": "USD approssimativi sui modelli a pagamento. x-preview-f-free (tier 0) è gratuito: default per l'efficienza massima."
-  }
+  "contract": "# Contratto di lavoro\n\nLavora SOLO dentro ${cwd}.\n\n## Regole operative\n- Non fare push, commit o modifiche fuori dal workspace.\n- Non toccare file elencati come fuori scope.\n- Esegui il comando di test indicato nel task prima di dichiarare completato.\n\n## Report finale (OBBLIGATORIO, mai facoltativo)\nPRIMA di dichiarare il task finito DEVI scrivere il file .oc-report.md nella root del workspace (${cwd}/.oc-report.md). Un task senza .oc-report.md è considerato INCOMPLETO. Il report contiene:\n- STATUS: COMPLETED | PARTIAL | BLOCKED (prima riga)\n- Obiettivo ripreso in una riga\n- File modificati (chiave \"files\", lista di path relativi)\n- Cosa hai fatto e perché\n- Come l'hai verificato (comando eseguito + esito)\n- Se BLOCKED: cosa ti blocca, testualmente, senza inventare dettagli\n"
 }
