@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.6.0] - 2026-08-23
+
+### Added
+- **`fanOut` tool (batch parallelism)**: delegate up to 12 tasks with ONE call —
+  same resolved model+variant for every task, round-robin account rotation per task,
+  a shared `fanOutId` tying all job records together, and ready-made `waitAll`
+  guidance in the response. Mid-loop failures keep already-started tasks running
+  and are reported (`started` / `failed`) instead of discarding work. Honors the
+  same concurrency cap (`DELEGATE_LIMIT_EXCEEDED`) and budget guards as `delegate`.
+- **`/opencode:parallel` command**: split arguments by `;;`, fan out, supervise with
+  `waitAll`, answer pending permissions, escalate retryable failures, verify
+  artifacts, report per-task.
+
 ## [1.5.0] - 2026-08-23
 
 ### Added

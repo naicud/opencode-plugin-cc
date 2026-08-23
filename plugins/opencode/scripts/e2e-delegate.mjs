@@ -99,7 +99,7 @@ async function main() {
     /* 2. tools/list */
     const list = await rpc("tools/list", {});
     const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-    if (JSON.stringify(names) !== JSON.stringify(["abort", "delegate", "doctor", "models", "respond", "shutdown", "status", "wait", "waitAll"])) {
+    if (JSON.stringify(names) !== JSON.stringify(["abort", "delegate", "doctor", "fanOut", "models", "respond", "shutdown", "status", "wait", "waitAll"])) {
       return fail(`tools/list mismatch: ${names}`);
     }
     console.log("tools/list ok:", names.join(", "));
@@ -188,7 +188,7 @@ async function main() {
     const resumed = parseResult(await rpc("tools/call", {
       name: "delegate",
       arguments: {
-        task: "Il task precedente è stato interrotto. Crea ora il file resume-proof.txt con contenuto ESATTAMENTE: RESUME-OK e aggiorna .oc-report.md.",
+        task: "Nuova istruzione per questa sessione: crea il file resume-proof.txt con contenuto ESATTAMENTE: RESUME-OK. Poi scrivi/aggiorna .oc-report.md come da contratto con STATUS della nuova istruzione.",
         cwd,
         effort: "max",
         resumeSessionID: slow.sessionID,
@@ -207,7 +207,10 @@ async function main() {
     if (resOutcome.status === "needsInput") return fail("resumed run hit needsInput");
     if (resOutcome.status !== "idle") return fail(`resume wait ended ${resOutcome.status}`);
     const resumeProof = path.join(cwd, "resume-proof.txt");
-    if (!fs.existsSync(resumeProof)) return fail("resume artifact resume-proof.txt not created");
+    if (!fs.existsSync(resumeProof)) {
+      console.error(`resume response tail: ${(resOutcome.response ?? "").slice(-400)}`);
+      return fail("resume artifact resume-proof.txt not created");
+    }
     if (fs.readFileSync(resumeProof, "utf8").trim() !== "RESUME-OK") return fail("resume artifact content wrong");
     console.log("resume ok: continued session produced resume-proof.txt (RESUME-OK)");
 
@@ -217,6 +220,35 @@ async function main() {
       return fail(`doctor report malformed: ${JSON.stringify(doc).slice(0, 200)}`);
     }
     console.log(`doctor ok=${doc.ok}: ${doc.checks.length} checks`);
+
+    /* 8c. fanOut: two tiny tasks in parallel, then waitAll both to idle */
+    const fan = parseResult(await rpc("tools/call", {
+      name: "fanOut",
+      arguments: {
+        cwd,
+        titlePrefix: "E2E",
+        effort: "max",
+        tasks: [
+          "Crea il file fan-a.txt con contenuto ESATTAMENTE: FAN-A-OK. Aggiorna .oc-report.md.",
+          "Crea il file fan-b.txt con contenuto ESATTAMENTE: FAN-B-OK. Aggiorna .oc-report.md.",
+        ],
+      },
+    }));
+    if (fan.started !== 2 || fan.jobs.length !== 2) return fail(`fanOut started=${fan.started}: ${JSON.stringify(fan.failed)}`);
+    if (!fan.fanOutId?.startsWith("fanout-")) return fail(`fanOutId malformed: ${fan.fanOutId}`);
+    if (new Set(fan.jobs.map((j) => j.sessionID)).size !== 2) return fail("fanOut sessions not distinct");
+    if (!/waitAll/.test(fan.nextStep)) return fail("fanOut nextStep missing waitAll guidance");
+    const fanWait = parseResult(await rpc("tools/call", {
+      name: "waitAll",
+      arguments: { sessionIDs: fan.jobs.map((j) => j.sessionID), cwd, timeoutSec: 180 },
+    }));
+    if ((fanWait.summary?.idle ?? 0) !== 2) return fail(`waitAll after fanOut: ${JSON.stringify(fanWait.summary)}`);
+    for (const [name, expected] of [["fan-a.txt", "FAN-A-OK"], ["fan-b.txt", "FAN-B-OK"]]) {
+      const p = path.join(cwd, name);
+      if (!fs.existsSync(p)) return fail(`fanOut artifact ${name} missing`);
+      if (fs.readFileSync(p, "utf8").trim() !== expected) return fail(`fanOut artifact ${name} wrong`);
+    }
+    console.log("fanOut ok: 2 parallel tasks byte-exact via waitAll");
 
     /* 9. clean shutdown: kill the plugin-spawned server, verify port freed */
     const sd = parseResult(await rpc("tools/call", {
@@ -248,7 +280,7 @@ async function main() {
     }
     console.log("port check ok: all stopped ports are free");
 
-    console.log("\nE2E PASS: full stdio flow verified (handshake, catalog, max-effort delegation, artifacts, report contract, abort, resume, clean shutdown).");
+    console.log("\nE2E PASS: full stdio flow verified (handshake, catalog, max-effort delegation, artifacts, report contract, abort, resume, doctor, fanOut+waitAll, clean shutdown).");
   } catch (err) {
     fail(err.message);
   } finally {

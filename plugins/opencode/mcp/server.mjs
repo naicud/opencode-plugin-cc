@@ -26,7 +26,7 @@ import { buildEscalation } from "./lib/escalation.mjs";
 import { checkBudget, summarizeBudget } from "./lib/budget.mjs";
 import { runDiagnostics, formatDoctorReport } from "../scripts/lib/doctor.mjs";
 import { createJobRecord } from "../scripts/lib/tracked-jobs.mjs";
-import { loadState, upsertJob, stateBase } from "../scripts/lib/state.mjs";
+import { loadState, upsertJob, stateBase, generateJobId } from "../scripts/lib/state.mjs";
 
 const PROTOCOL_VERSION = "2024-11-05";
 const WAIT_POLL_INTERVAL_MS = 5000;
@@ -257,6 +257,145 @@ async function toolDelegate(args) {
     ...(retryTarget ? { retryOf: retryTarget.id } : {}),
     cwd,
     startedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Fan out MULTIPLE tasks in parallel with ONE call: same resolved model+variant
+ * for every task, round-robin account rotation per task (when accounts are
+ * configured), one job record each tagged with a shared fanOutId. Supervise the
+ * batch afterwards with waitAll. Partial failures mid-loop keep already-started
+ * tasks running and are reported instead of discarding the work.
+ */
+async function toolFanOut(args) {
+  if (!Array.isArray(args.tasks) || args.tasks.length === 0) {
+    throw Object.assign(new Error('fanOut requires a non-empty "tasks" string array'), {
+      code: "TASKS_REQUIRED",
+    });
+  }
+  if (args.tasks.length > 12) {
+    throw Object.assign(new Error("fanOut supports at most 12 tasks per call"), {
+      code: "TASKS_TOO_MANY",
+    });
+  }
+  args.tasks.forEach((t, i) => {
+    if (!t || typeof t !== "string" || !t.trim()) {
+      throw Object.assign(new Error(`tasks[${i}] must be a non-empty string`), {
+        code: "TASKS_INVALID",
+      });
+    }
+  });
+  if (args.titlePrefix != null && (typeof args.titlePrefix !== "string" || !args.titlePrefix.trim())) {
+    throw Object.assign(new Error('fanOut: "titlePrefix" must be a non-empty string'), {
+      code: "TITLE_PREFIX_INVALID",
+    });
+  }
+
+  const cwd = args.cwd ?? process.cwd();
+  const config = loadConfig();
+  const jobsNow = loadState(cwd).jobs ?? [];
+
+  // Concurrency cap counts the whole batch, not just the first task.
+  const cap = Number(config.concurrency?.maxDelegates);
+  if (Number.isFinite(cap) && cap > 0) {
+    const running = jobsNow.filter((j) => j.type === "delegate" && j.status === "running").length;
+    if (running + args.tasks.length > cap) {
+      throw Object.assign(
+        new Error(
+          `delegate limit reached: ${running}/${cap} delegate jobs already running and fanOut wants ${args.tasks.length} more (config.concurrency.maxDelegates); wait or abort first`
+        ),
+        { code: "DELEGATE_LIMIT_EXCEEDED" }
+      );
+    }
+  }
+
+  // Budget guard once for the whole batch.
+  const verdict = checkBudget(config, jobsNow);
+  if (!verdict.ok) {
+    throw Object.assign(new Error(verdict.reason), { code: verdict.code });
+  }
+
+  // Resolve model+variant ONCE against the catalog; identical effort everywhere.
+  const firstAccount =
+    config.accounts?.names?.length > 0 ? pickAccount(config, cwd, args.account ?? "auto") : null;
+  const catalogModels = (await getCatalog(await getClient(cwd, firstAccount))).models;
+  const selection = resolveSelection(
+    { modelId: args.model, tier: args.tier, effort: args.effort },
+    catalogModels,
+    config
+  );
+  const selector = buildModelSelector(config.provider, selection.model.id, selection.variant);
+  const agent = args.agent ?? config.defaults?.agent ?? "build";
+  const prefix = (
+    typeof args.titlePrefix === "string" && args.titlePrefix.trim()
+      ? args.titlePrefix.replace(/\s+/g, " ").trim()
+      : "Fanout"
+  ).slice(0, 40);
+
+  const fanOutId = generateJobId("fanout");
+  const n = args.tasks.length;
+  const jobs = [];
+  const failed = [];
+
+  for (let i = 0; i < n; i += 1) {
+    const task = args.tasks[i].trim();
+    try {
+      // Round-robin rotates per task when accounts are configured.
+      let account = null;
+      if (config.accounts?.names?.length > 0) {
+        account =
+          i === 0 && args.account !== undefined && args.account !== "auto"
+            ? firstAccount
+            : pickAccount(config, cwd, args.account ?? "auto");
+      }
+      const { client } = await getConnection(cwd, account);
+      const session = await client.createSession({
+        title: `${prefix} ${i + 1}/${n}: ${task.replace(/\s+/g, " ").slice(0, 60)}`,
+      });
+      await client.sendPromptAsync(session.id, `${renderContract(config.contract, cwd)}\n---\n\n${task}`, {
+        agent,
+        model: selector.model,
+        variant: selection.variant,
+      });
+      const job = createJobRecord(cwd, "delegate", {
+        sessionID: session.id,
+        model: selection.model.id,
+        variant: selection.variant ?? null,
+        effortApplied: selection.effortApplied,
+        tier: selection.model.tier ?? null,
+        account,
+        directory: cwd,
+        task,
+        autoRetry: false,
+        fanOutId,
+        fanOutIndex: i,
+      });
+      upsertJob(cwd, { id: job.id, status: "running", phase: "delegated" });
+      jobs.push({
+        jobId: job.id,
+        sessionID: session.id,
+        index: i,
+        account,
+        title: `${prefix} ${i + 1}/${n}`,
+      });
+    } catch (err) {
+      failed.push({ index: i, error: err.message, ...(err.code ? { code: err.code } : {}) });
+    }
+  }
+
+  return {
+    fanOutId,
+    total: n,
+    started: jobs.length,
+    failed,
+    jobs,
+    modelRef: `${config.provider}/${selection.model.id}`,
+    variant: selection.variant ?? null,
+    effortApplied: selection.effortApplied,
+    nextStep:
+      jobs.length > 0
+        ? `Supervise with waitAll on these sessionIDs: ${jobs.map((j) => j.sessionID).join(", ")}`
+        : "No task could be started.",
   };
 }
 
@@ -808,6 +947,27 @@ const TOOLS = [
     },
   },
   {
+    name: "fanOut",
+    title: "Fan out tasks",
+    description:
+      "Delegate MULTIPLE tasks in parallel with one call: same resolved model+variant for all, round-robin account rotation per task, shared fanOutId. Returns per-task jobId/sessionID; supervise the batch with waitAll.",
+    annotations: { openWorldHint: true },
+    inputSchema: {
+      type: "object",
+      required: ["tasks"],
+      properties: {
+        tasks: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 12, description: "Up to 12 full task descriptions (goal, scope, verifiable criteria)" },
+        cwd: { type: "string", description: "Workspace directory" },
+        model: { type: "string", description: "Explicit model id (overrides tier)" },
+        tier: { type: "number", description: "Tier 0-3 when no explicit model" },
+        effort: { type: "string", enum: ["off", "high", "max"], description: "Effort request; default from effortPolicy" },
+        account: { type: "string", description: '"auto" (default, round-robin rotates across accounts) or explicit name' },
+        agent: { type: "string", description: "OpenCode agent (default build)" },
+        titlePrefix: { type: "string", description: 'Session title prefix (default "Fanout")' },
+      },
+    },
+  },
+  {
     name: "wait",
     title: "Wait for session",
     description:
@@ -915,6 +1075,7 @@ const TOOLS = [
 const TOOL_HANDLERS = {
   models: toolModels,
   delegate: toolDelegate,
+  fanOut: toolFanOut,
   wait: toolWait,
   waitAll: toolWaitAll,
   status: toolStatus,

@@ -22,7 +22,7 @@ they already have.
 - `/opencode:review` for a normal read-only OpenCode review
 - `/opencode:adversarial-review` for a steerable challenge review
 - `/opencode:rescue`, `/opencode:status`, `/opencode:result`, and `/opencode:cancel` to delegate work and manage background jobs
-- `/opencode:delegate` plus **nine MCP tools** (`models`, `delegate`, `wait`, `waitAll`, `status`, `respond`, `abort`, `shutdown`, `doctor`) reachable as `mcp__plugin_opencode_oc__*` for tiered, budget-aware, multi-account delegation to OpenCode models with full supervision (permissions, escalation with optional auto-retry, retry chains, session resume), spend limits, and clean process lifecycle
+- `/opencode:delegate` plus **ten MCP tools** (`models`, `delegate`, `fanOut`, `wait`, `waitAll`, `status`, `respond`, `abort`, `shutdown`, `doctor`) and `/opencode:parallel` for batch fan-out reachable as `mcp__plugin_opencode_oc__*` for tiered, budget-aware, multi-account delegation to OpenCode models with full supervision (permissions, escalation with optional auto-retry, retry chains, session resume), spend limits, and clean process lifecycle
 
 ## Requirements
 
@@ -123,13 +123,15 @@ the Apache-2.0 license.
 - `/opencode:cancel` -- Cancels an active background OpenCode job.
 - `/opencode:setup` -- Checks OpenCode install/auth, can enable/disable the review gate hook.
 - `/opencode:delegate` -- Delegates a task through the MCP delegation runtime with `--model <id>`, `--tier N` (0–3), `--effort max|high|off`, `--account <name|auto>`. The subagent `opencode-delegate` runs the delegate/wait/verify loop for you.
+- `/opencode:parallel` -- Fan out MULTIPLE tasks in one shot (`task1 ;; task2 ;; task3`, same flags as delegate): calls `fanOut` then supervises everything with `waitAll`, answers permissions, retries retryable failures, verifies artifacts, reports per-task.
 
 ## Model Delegation (MCP)
 
-The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over stdio, zero npm deps) exposing **nine tools**, reachable as `mcp__plugin_opencode_oc__models|delegate|wait|waitAll|status|respond|abort|shutdown|doctor`:
+The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over stdio, zero npm deps) exposing **ten tools**, reachable as `mcp__plugin_opencode_oc__models|delegate|fanOut|wait|waitAll|status|respond|abort|shutdown|doctor`:
 
 - **models** — merged catalog (file + live `/config/providers`) with tiers, variants, real costs (`costTable`: USD per Mtok in/out), effort policy, accounts overview and budget hint.
 - **delegate** — resolves model+variant client-side (the server accepts any variant string and silently falls back to base — see `docs/opencode-api-findings.md` P2), creates a titled session, fires `prompt_async` with the work contract from `config/models.json`, records a job visible to `status`. Extras: `retryOf` links a re-run to a failed/cancelled job, `resumeSessionID` continues an existing persisted session (crash recovery / multi-step), `account` routes quota across pooled accounts, `title` overrides the session name, `autoRetry: true` re-delegates ONCE at the escalation-suggested model+variant if the run dies with a retryable error (returns `status:"retried"` + new sessionID). Enforced guards: `config.concurrency.maxDelegates` cap and `config.budget` spend limits (`DELEGATE_LIMIT_EXCEEDED`, `BUDGET_JOB_MAX`, `BUDGET_DAILY_MAX`).
+- **fanOut** — batch parallelism: delegate up to 12 tasks with ONE call. Same resolved model+variant for every task; round-robin account rotation per task (quota amplification); one job record each under a shared `fanOutId`; mid-loop failures keep started tasks running and are reported (`started`/`failed`). Response includes ready-made `nextStep` waitAll guidance.
 - **wait** — polls every 5s; returns on idle, on pending permission (`needsInput`), or timeout (with `progress`: latest assistant text tail + todo counts). Responses carry `jobId`, `account` and a todo summary so no extra calls are needed.
 - **waitAll** — parallel supervision: wait on up to 12 sessions with one shared deadline; per-session results plus aggregate summary `{total, idle, needsInput, timeout, error}`.
 - **status** — with `sessionID`: non-blocking snapshot (failing sub-endpoints become `null`, never errors). Without: batch mode listing the 20 most recent delegate jobs (model, variant, account, tier, retry/resume lineage, errors, timestamps).
