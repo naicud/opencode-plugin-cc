@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.4.0] - 2026-08-23
+
+### Added
+- **`shutdown` tool (clean teardown)**: stops OpenCode servers the plugin spawned —
+  gracefully aborts busy sessions first (resumable via `resumeSessionID`), then SIGTERM→SIGKILL
+  on **only** the exact recorded pids. Every spawn is now recorded in a per-workspace registry
+  (`$CLAUDE_PLUGIN_DATA/state/<hash>/servers/serve-<port>.json`: pid, port, account); before any
+  kill the pid's command line is verified via `ps` to really be an `opencode serve` process, so
+  foreign or recycled pids are refused and left untouched. Running delegate jobs of stopped
+  servers are marked cancelled (`cancelledBy: "shutdown"`). Scopes: current workspace (default),
+  per-account filter, or `all:true` across every workspace.
+
 ## [1.3.0] - 2026-08-23
 
 ### Added

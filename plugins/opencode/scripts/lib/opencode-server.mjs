@@ -5,14 +5,20 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { stateRoot } from "./state.mjs";
+import { writeJson } from "./fs.mjs";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 4096;
 const DERIVED_PORT_BASE = 4100;
 const DERIVED_PORT_SPAN = 400;
 const SERVER_START_TIMEOUT = 30_000;
+const STOP_GRACE_TIMEOUT = 5_000;
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 /**
  * Derive a deterministic port for a workspace (CA-16): avoids every delegate
@@ -108,12 +114,150 @@ export async function isServerRunning(host = DEFAULT_HOST, port = DEFAULT_PORT) 
   return (await probePort(host, port)) === "ok";
 }
 
+/* ----------------------------- server registry ---------------------------- */
+// Every server this plugin spawns is recorded on disk (pid + port + account)
+// so a later session can shut it down cleanly without sweeping unrelated
+// processes. Stopping is identity-checked: a pid is only signalled when `ps`
+// confirms it really is an "opencode serve" process.
+
+function serverRegistryDir(cwd) {
+  return path.join(stateRoot(cwd), "servers");
+}
+
+function registryFileFor(cwd, port) {
+  return path.join(serverRegistryDir(cwd), `serve-${port}.json`);
+}
+
+/**
+ * Record a freshly spawned server so it can be tracked and stopped later.
+ * @param {string} cwd
+ * @param {{ pid: number, port: number, host: string, account?: string|null, logFile?: string }} info
+ */
+export function recordServerEntry(cwd, info) {
+  const dir = serverRegistryDir(cwd);
+  fs.mkdirSync(dir, { recursive: true });
+  writeJson(registryFileFor(cwd, info.port), {
+    ...info,
+    cwd,
+    account: info.account ?? null,
+    startedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Remove one registry entry (after the process was confirmed dead).
+ */
+export function removeRegistryEntry(cwd, port) {
+  fs.rmSync(registryFileFor(cwd, port), { force: true });
+}
+
+/**
+ * Read every tracked server entry for a workspace.
+ * @param {string} cwd
+ * @returns {Array<{ pid: number, port: number, host: string, account: string|null, cwd: string, startedAt: string }>}
+ */
+export function readServerRegistry(cwd) {
+  const dir = serverRegistryDir(cwd);
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir)
+    .filter((f) => /^serve-\d+\.json$/.test(f))
+    .map((f) => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+      } catch {
+        return null;
+      }
+    })
+    .filter((e) => e && typeof e.pid === "number" && typeof e.port === "number");
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === "EPERM"; // alive but owned by another user
+  }
+}
+
+function processCommand(pid) {
+  try {
+    return execSync(`ps -p ${pid} -o command=`, { encoding: "utf8" }).trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Stop ONE tracked server entry. The pid is only signalled after verifying via
+ * `ps` that the command line matches an opencode serve process — foreign or
+ * recycled pids are refused, never killed.
+ * @param {object} entry - registry entry ({ pid, port, ... })
+ * @returns {Promise<{ outcome: "stopped"|"alreadyDead"|"refused"|"failed", reason?: string }>}
+ */
+export async function stopServerEntry(entry) {
+  if (!Number.isInteger(entry.pid) || entry.pid <= 0) {
+    return { outcome: "alreadyDead" };
+  }
+  if (!isProcessAlive(entry.pid)) {
+    return { outcome: "alreadyDead" };
+  }
+  const cmd = processCommand(entry.pid);
+  if (!/\bopencode\b/.test(cmd) || /\bserve\b/.test(cmd) === false) {
+    return {
+      outcome: "refused",
+      reason: `pid ${entry.pid} is not an opencode serve process (${cmd.slice(0, 100) || "no cmdline"})`,
+    };
+  }
+  try {
+    process.kill(entry.pid, "SIGTERM");
+  } catch {
+    return { outcome: "alreadyDead" };
+  }
+  const deadline = Date.now() + STOP_GRACE_TIMEOUT;
+  while (Date.now() < deadline && isProcessAlive(entry.pid)) {
+    await sleep(200);
+  }
+  if (isProcessAlive(entry.pid)) {
+    try {
+      process.kill(entry.pid, "SIGKILL");
+    } catch {
+      // lost the race with its own exit — fine
+    }
+    await sleep(300);
+  }
+  return isProcessAlive(entry.pid)
+    ? { outcome: "failed", reason: `pid ${entry.pid} survived SIGKILL` }
+    : { outcome: "stopped" };
+}
+
+/**
+ * Stop tracked servers for a workspace (optionally one account), cleaning up
+ * their registry entries for every non-refused outcome.
+ * @param {string} cwd
+ * @param {{ account?: string|null }} [opts]
+ * @returns {Promise<Array<{ entry: object, outcome: string, reason?: string }>>}
+ */
+export async function stopTrackedServers(cwd, opts = {}) {
+  let entries = readServerRegistry(cwd);
+  if (opts.account) entries = entries.filter((e) => e.account === opts.account);
+  const results = [];
+  for (const entry of entries) {
+    const res = await stopServerEntry(entry);
+    if (res.outcome !== "refused") removeRegistryEntry(cwd, entry.port);
+    results.push({ entry, ...res });
+  }
+  return results;
+}
+
 /**
  * Start the OpenCode server if not already running.
  * The port is derived from the workspace (and account, when given) unless
  * opts.port is set; ports held by foreign processes are skipped incrementally.
  * stdout/stderr go to <stateRoot>/servers/serve-<port>.log so start failures
- * are diagnosable (CA-15).
+ * are diagnosable (CA-15). Successful spawns are recorded in the server
+ * registry (<stateRoot>/servers/serve-<port>.json) for clean shutdown later.
  * @param {object} opts
  * @param {string} opts.cwd - workspace directory (drives port derivation)
  * @param {number} [opts.port] - explicit override
@@ -172,6 +316,7 @@ export async function ensureServer(opts = {}) {
   const deadline = Date.now() + SERVER_START_TIMEOUT;
   while (Date.now() < deadline) {
     if (await isServerRunning(host, port)) {
+      recordServerEntry(cwd, { pid: proc.pid, port, host, account: opts.account ?? null, logFile });
       return { url: `http://${host}:${port}`, pid: proc.pid, alreadyRunning: false };
     }
     await new Promise((r) => setTimeout(r, 500));

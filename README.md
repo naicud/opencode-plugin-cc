@@ -21,7 +21,7 @@ they already have.
 - `/opencode:review` for a normal read-only OpenCode review
 - `/opencode:adversarial-review` for a steerable challenge review
 - `/opencode:rescue`, `/opencode:status`, `/opencode:result`, and `/opencode:cancel` to delegate work and manage background jobs
-- `/opencode:delegate` plus **seven MCP tools** (`models`, `delegate`, `wait`, `waitAll`, `status`, `respond`, `abort`) reachable as `mcp__plugin_opencode_oc__*` for tiered, budget-aware, multi-account delegation to OpenCode models with full supervision (permissions, escalation, retry chains, session resume)
+- `/opencode:delegate` plus **eight MCP tools** (`models`, `delegate`, `wait`, `waitAll`, `status`, `respond`, `abort`, `shutdown`) reachable as `mcp__plugin_opencode_oc__*` for tiered, budget-aware, multi-account delegation to OpenCode models with full supervision (permissions, escalation, retry chains, session resume) and clean process lifecycle
 
 ## Requirements
 
@@ -125,7 +125,7 @@ the Apache-2.0 license.
 
 ## Model Delegation (MCP)
 
-The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over stdio, zero npm deps) exposing **seven tools**, reachable as `mcp__plugin_opencode_oc__models|delegate|wait|waitAll|status|respond|abort`:
+The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over stdio, zero npm deps) exposing **eight tools**, reachable as `mcp__plugin_opencode_oc__models|delegate|wait|waitAll|status|respond|abort|shutdown`:
 
 - **models** — merged catalog (file + live `/config/providers`) with tiers, variants, real costs (`costTable`: USD per Mtok in/out), effort policy, accounts overview and budget hint.
 - **delegate** — resolves model+variant client-side (the server accepts any variant string and silently falls back to base — see `docs/opencode-api-findings.md` P2), creates a titled session, fires `prompt_async` with the work contract from `config/models.json`, records a job visible to `status`. Extras: `retryOf` links a re-run to a failed/cancelled job, `resumeSessionID` continues an existing persisted session (crash recovery / multi-step), `account` routes quota across pooled accounts, `title` overrides the session name.
@@ -134,6 +134,7 @@ The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over
 - **status** — with `sessionID`: non-blocking snapshot (failing sub-endpoints become `null`, never errors). Without: batch mode listing the 20 most recent delegate jobs (model, variant, account, tier, retry/resume lineage, errors, timestamps).
 - **respond** — answers a pending permission (`once` / `always` / `reject`). Auto-approve/auto-reject regexes live in `config/models.json`.
 - **abort** — kills a runaway session and marks the job cancelled.
+- **shutdown** — clean teardown of plugin-spawned servers: gracefully aborts busy sessions, SIGTERM→SIGKILL only the exact recorded pids (identity-checked against `ps` — foreign or recycled pids are refused, never signalled), marks their jobs cancelled. Default scope is the current workspace; `account` narrows it; `all:true` sweeps every workspace. Leaves zero orphan processes — no `pkill` needed.
 
 Tiers (curated in `plugins/opencode/config/models.json`; everything else enters unclassified after `npm run models:sync`):
 
@@ -155,7 +156,7 @@ Reasoning-effort variants (`high`/`max`) bill reasoning tokens as **output** tok
 ### Testing
 
 ```bash
-npm test            # unit suite (128 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, escalation, job control
+npm test            # unit suite (141 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, escalation, job control, clean shutdown
 npm run test:e2e    # full delegation round-trip against a real opencode server (needs auth)
 npm run test:stress # permission ask/deny, concurrency, server kill+restart recovery (needs auth)
 npm run test:multiaccount # round-robin rotation across two named credentials, per-account isolation, state persistence (needs auth)
@@ -183,7 +184,16 @@ Routing: `delegate` accepts `account: "auto"` (default) or an explicit name. `"a
 
 ### Cleanup
 
-Delegate servers persist between calls. To kill them all:
+Servers spawned by the plugin are tracked in a per-workspace registry (pid + port + account under
+`$CLAUDE_PLUGIN_DATA/state/<hash>/servers/`). The clean way to stop them:
+
+```
+mcp__plugin_opencode_oc__shutdown { }          # this workspace
+mcp__plugin_opencode_oc__shutdown { all: true } # every workspace
+```
+
+The tool aborts busy sessions first (resumable later via `resumeSessionID`), kills exactly the
+tracked processes, and cancels their running jobs. Manual fallback:
 
 ```bash
 pkill -f "opencode serve"

@@ -99,7 +99,7 @@ async function main() {
     /* 2. tools/list */
     const list = await rpc("tools/list", {});
     const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-    if (JSON.stringify(names) !== JSON.stringify(["abort", "delegate", "models", "respond", "status", "wait", "waitAll"])) {
+    if (JSON.stringify(names) !== JSON.stringify(["abort", "delegate", "models", "respond", "shutdown", "status", "wait", "waitAll"])) {
       return fail(`tools/list mismatch: ${names}`);
     }
     console.log("tools/list ok:", names.join(", "));
@@ -211,7 +211,37 @@ async function main() {
     if (fs.readFileSync(resumeProof, "utf8").trim() !== "RESUME-OK") return fail("resume artifact content wrong");
     console.log("resume ok: continued session produced resume-proof.txt (RESUME-OK)");
 
-    console.log("\nE2E PASS: full stdio flow verified (handshake, catalog, max-effort delegation, artifacts, report contract, abort).");
+    /* 9. clean shutdown: kill the plugin-spawned server, verify port freed */
+    const sd = parseResult(await rpc("tools/call", {
+      name: "shutdown",
+      arguments: { cwd },
+    }));
+    if (!Array.isArray(sd.stopped) || sd.stopped.length < 1) {
+      return fail(`shutdown stopped nothing: ${JSON.stringify(sd)}`);
+    }
+    for (const entry of sd.stopped) {
+      if (typeof entry.pid !== "number" || typeof entry.port !== "number") {
+        return fail(`shutdown entry malformed: ${JSON.stringify(entry)}`);
+      }
+    }
+    console.log(`shutdown ok: stopped=${sd.stopped.map((s) => s.port).join(",")} jobsCancelled=${sd.jobsCancelled}`);
+    // every stopped port must now be unreachable
+    await new Promise((r) => setTimeout(r, 500));
+    for (const entry of sd.stopped) {
+      let reachable = false;
+      try {
+        const res = await fetch(`http://127.0.0.1:${entry.port}/global/health`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        reachable = res.ok;
+      } catch {
+        reachable = false;
+      }
+      if (reachable) return fail(`port ${entry.port} still serving after shutdown`);
+    }
+    console.log("port check ok: all stopped ports are free");
+
+    console.log("\nE2E PASS: full stdio flow verified (handshake, catalog, max-effort delegation, artifacts, report contract, abort, resume, clean shutdown).");
   } catch (err) {
     fail(err.message);
   } finally {

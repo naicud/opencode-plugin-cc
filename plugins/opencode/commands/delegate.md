@@ -1,7 +1,7 @@
 ---
 description: Delegate a task to an OpenCode model with tier/effort control and supervise it
 argument-hint: '[--model <id>] [--tier N] [--effort max|high|off] [--account <name|auto>] <task>'
-allowed-tools: Bash(node:*), mcp__plugin_opencode_oc__models, mcp__plugin_opencode_oc__delegate, mcp__plugin_opencode_oc__wait, mcp__plugin_opencode_oc__waitAll, mcp__plugin_opencode_oc__status, mcp__plugin_opencode_oc__respond, mcp__plugin_opencode_oc__abort
+allowed-tools: Bash(node:*), mcp__plugin_opencode_oc__models, mcp__plugin_opencode_oc__delegate, mcp__plugin_opencode_oc__wait, mcp__plugin_opencode_oc__waitAll, mcp__plugin_opencode_oc__status, mcp__plugin_opencode_oc__respond, mcp__plugin_opencode_oc__abort, mcp__plugin_opencode_oc__shutdown
 ---
 
 Delegate the following task through the OpenCode MCP tools.

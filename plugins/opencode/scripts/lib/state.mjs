@@ -9,17 +9,24 @@ import { ensureDir, readJson, writeJson } from "./fs.mjs";
 const MAX_JOBS = 50;
 
 /**
+ * Base directory containing every per-workspace state folder
+ * (`<base>/<sha256(workspace)[0:16]>/`). Used to enumerate registries of ALL
+ * workspaces (e.g. for the shutdown tool's "all" scope).
+ * @returns {string}
+ */
+export function stateBase() {
+  return process.env.CLAUDE_PLUGIN_DATA
+    ? path.join(process.env.CLAUDE_PLUGIN_DATA, "state")
+    : path.join("/tmp", "opencode-companion");
+}
+
+/**
  * Compute the state directory root for a workspace.
  * @param {string} workspacePath
  * @returns {string}
  */
 export function stateRoot(workspacePath) {
-  const base =
-    process.env.CLAUDE_PLUGIN_DATA
-      ? path.join(process.env.CLAUDE_PLUGIN_DATA, "state")
-      : path.join("/tmp", "opencode-companion");
-  const hash = crypto.createHash("sha256").update(workspacePath).digest("hex").slice(0, 16);
-  return path.join(base, hash);
+  return path.join(stateBase(), crypto.createHash("sha256").update(workspacePath).digest("hex").slice(0, 16));
 }
 
 /**

@@ -2,15 +2,20 @@
 // JSON-RPC 2.0 over stdio, one message per line, zero npm dependencies.
 // Methods: initialize, tools/list, tools/call; anything else with an id → -32601.
 //
-// Six tools: models, delegate, wait, status, respond, abort.
+// Eight tools: models, delegate, wait, waitAll, status, respond, abort, shutdown.
 // Reachable from Claude Code as mcp__plugin_opencode_oc__<tool> (plugin name
 // is "opencode", server key in .mcp.json is "oc").
 
 import readline from "node:readline";
 import path from "node:path";
+import fs from "node:fs";
 import {
   ensureServer,
   createClient,
+  readServerRegistry,
+  stopServerEntry,
+  removeRegistryEntry,
+  stopTrackedServers,
 } from "../scripts/lib/opencode-server.mjs";
 import { loadConfig, getCatalog, formatHint, formatCostTable } from "./lib/catalog.mjs";
 import { resolveSelection, buildModelSelector } from "./lib/resolve.mjs";
@@ -18,7 +23,7 @@ import { createPermissionWatcher } from "./lib/permissions.mjs";
 import { pickAccount, buildAuthContent, envKeyName, listAccounts } from "./lib/accounts.mjs";
 import { buildEscalation } from "./lib/escalation.mjs";
 import { createJobRecord } from "../scripts/lib/tracked-jobs.mjs";
-import { loadState, upsertJob } from "../scripts/lib/state.mjs";
+import { loadState, upsertJob, stateBase } from "../scripts/lib/state.mjs";
 
 const PROTOCOL_VERSION = "2024-11-05";
 const WAIT_POLL_INTERVAL_MS = 5000;
@@ -52,7 +57,7 @@ async function getConnection(cwd, account = null) {
     const client = createClient(url, { directory: cwd });
     const watcher = createPermissionWatcher({ client, config: () => loadConfig() });
     watcher.start();
-    conn = { client, watcher, account };
+    conn = { client, watcher, account, cwd };
     connections.set(url, conn);
   }
   return conn;
@@ -460,6 +465,177 @@ async function toolAbort(args) {
   return { aborted: true, sessionID: args.sessionID };
 }
 
+/**
+ * Enumerate every tracked-server registry across ALL workspaces
+ * (shutdown tool "all" scope). Entries carry their own cwd.
+ */
+function allRegistryEntries() {
+  const base = stateBase();
+  let hashes;
+  try {
+    hashes = fs.readdirSync(base);
+  } catch {
+    return [];
+  }
+  const entries = [];
+  for (const h of hashes) {
+    const dir = path.join(base, h, "servers");
+    if (!fs.existsSync(dir)) continue;
+    for (const f of fs.readdirSync(dir)) {
+      if (!/^serve-\d+\.json$/.test(f)) continue;
+      try {
+        const entry = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+        if (entry && typeof entry.pid === "number" && typeof entry.cwd === "string") {
+          entries.push(entry);
+        }
+      } catch {
+        // unreadable entry: skip
+      }
+    }
+  }
+  return entries;
+}
+
+/**
+ * Gracefully abort the busy sessions of one server (best effort) before its
+ * process is stopped. Sessions survive as MessageAbortedError and can be
+ * continued later via delegate.resumeSessionID.
+ */
+async function abortBusySessions(baseUrl, cwd) {
+  const client = createClient(baseUrl, { directory: cwd });
+  const busy = await client.getSessionStatus();
+  const aborted = [];
+  for (const sessionID of Object.keys(busy ?? {})) {
+    try {
+      await client.abortSession(sessionID);
+      aborted.push(sessionID);
+    } catch {
+      // already idle or endpoint hiccup: not fatal for shutdown
+    }
+  }
+  return aborted;
+}
+
+function cancelRunningJobs(cwd, { account = null, sessionIDs = [] } = {}) {
+  let cancelled = 0;
+  let jobs;
+  try {
+    jobs = loadState(cwd).jobs ?? [];
+  } catch {
+    return 0;
+  }
+  const sidSet = new Set(sessionIDs);
+  for (const job of jobs) {
+    if (job.status !== "running" || !job.sessionID) continue;
+    const matchesAccount = !account || job.account === account;
+    const matchesSession = sidSet.size === 0 || sidSet.has(job.sessionID);
+    if (matchesAccount && matchesSession) {
+      markJobBySession(cwd, job.sessionID, () => ({
+        status: "cancelled",
+        completedAt: new Date().toISOString(),
+        cancelledBy: "shutdown",
+      }));
+      cancelled += 1;
+    }
+  }
+  return cancelled;
+}
+
+/**
+ * Cleanly stop plugin-spawned OpenCode servers:
+ * 1. abort busy sessions on each target (graceful),
+ * 2. stop permission watchers + drop live connections,
+ * 3. SIGTERM→SIGKILL the exact recorded pids (ps-identity checked; foreign or
+ *    recycled pids are refused, never signalled),
+ * 4. mark their running delegate jobs cancelled.
+ * Scope: current workspace by default; `account` narrows it; `all:true`
+ * sweeps every workspace this plugin ever spawned servers for.
+ */
+async function toolShutdown(args) {
+  if (args.all != null && typeof args.all !== "boolean") {
+    throw Object.assign(new Error('shutdown: "all" must be a boolean'), { code: "ALL_INVALID" });
+  }
+  if (args.account != null && (typeof args.account !== "string" || !args.account)) {
+    throw Object.assign(new Error('shutdown: "account" must be a non-empty string'), {
+      code: "ACCOUNT_INVALID",
+    });
+  }
+  const cwd = args.cwd ?? process.cwd();
+  const scopeAll = args.all === true;
+  const account = args.account ?? null;
+
+  // Collect target registry entries grouped by their owning workspace.
+  let targets; // Array<{ cwd, entry }>
+  if (scopeAll) {
+    targets = allRegistryEntries()
+      .filter((e) => !account || e.account === account)
+      .map((entry) => ({ cwd: entry.cwd, entry }));
+  } else {
+    targets = readServerRegistry(cwd)
+      .filter((e) => !account || e.account === account)
+      .map((entry) => ({ cwd, entry }));
+  }
+
+  const stopped = [];
+  const alreadyDead = [];
+  const refused = [];
+  const failed = [];
+  const abortedSessions = [];
+  let jobsCancelled = 0;
+
+  for (const target of targets) {
+    const baseUrl = `http://${target.entry.host ?? "127.0.0.1"}:${target.entry.port}`;
+    // 1) graceful abort while the server is still alive
+    try {
+      abortedSessions.push(...(await abortBusySessions(baseUrl, target.cwd)));
+    } catch {
+      // server unreachable: proceed to process cleanup anyway
+    }
+    // 2) drop any live connection + watcher bound to this server
+    for (const [url, conn] of [...connections]) {
+      if (url !== baseUrl) continue;
+      try {
+        conn.watcher.stop();
+      } catch {
+        // watcher already gone
+      }
+      connections.delete(url);
+    }
+    // 3) identity-checked process stop + registry cleanup
+    const res = await stopServerEntry(target.entry);
+    if (res.outcome !== "refused") removeRegistryEntry(target.cwd, target.entry.port);
+    switch (res.outcome) {
+      case "stopped":
+        stopped.push({ port: target.entry.port, pid: target.entry.pid, account: target.entry.account ?? null });
+        break;
+      case "alreadyDead":
+        alreadyDead.push({ port: target.entry.port });
+        break;
+      case "refused":
+        refused.push({ port: target.entry.port, pid: target.entry.pid, reason: res.reason });
+        break;
+      default:
+        failed.push({ port: target.entry.port, pid: target.entry.pid, reason: res.reason });
+    }
+    // 4) bookkeeping per owning workspace
+    jobsCancelled += cancelRunningJobs(target.cwd, {
+      account: target.entry.account ?? null,
+      sessionIDs: abortedSessions,
+    });
+  }
+
+  return {
+    scope: scopeAll ? "all" : "workspace",
+    ...(account ? { account } : {}),
+    stopped,
+    alreadyDead,
+    refused,
+    failed,
+    abortedSessions,
+    jobsCancelled,
+  };
+}
+
 const TOOLS = [
   {
     name: "models",
@@ -571,6 +747,21 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: "shutdown",
+    title: "Shutdown delegate servers",
+    description:
+      "Cleanly stop OpenCode servers spawned by this plugin: gracefully aborts busy sessions, kills ONLY the exact tracked processes (ps identity-checked — foreign pids are refused), marks their jobs cancelled. Leaves zero orphan processes. Default scope: current workspace; account narrows it; all:true sweeps every workspace.",
+    annotations: { destructiveHint: true, idempotentHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        cwd: { type: "string", description: "Workspace directory (default scope)" },
+        account: { type: "string", description: "Only stop servers bound to this account" },
+        all: { type: "boolean", description: "Stop plugin-spawned servers across ALL workspaces" },
+      },
+    },
+  },
 ];
 
 const TOOL_HANDLERS = {
@@ -581,6 +772,7 @@ const TOOL_HANDLERS = {
   status: toolStatus,
   respond: toolRespond,
   abort: toolAbort,
+  shutdown: toolShutdown,
 };
 
 /* -------------------------------- json-rpc -------------------------------- */

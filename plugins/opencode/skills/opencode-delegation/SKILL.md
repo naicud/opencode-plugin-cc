@@ -46,6 +46,8 @@ The delegation contract (config/models.json) is prepended automatically: it rest
   `waitAll` with up to 12 sessionIDs (shared deadline, one result + summary each)
 - `needsInput`: approve only safe read/test commands (`respond once`); reject git push/commit, rm -rf, sudo, curl-to-shell
 - two consecutive timeouts → `abort`
+- done supervising → `shutdown` stops the spawned servers cleanly (sessions aborted gracefully,
+  only identity-verified pids killed, jobs marked cancelled; `all: true` sweeps every workspace)
 - failed with retryable error → follow the `escalation` object: re-delegate at `suggestModel` + `suggestVariant`, passing `retryOf: <failed jobId>`
 - crashed/interrupted session → re-delegate with `resumeSessionID: <sessionID>` to continue in place
 - verify `.oc-report.md` AND listed files yourself before trusting success
