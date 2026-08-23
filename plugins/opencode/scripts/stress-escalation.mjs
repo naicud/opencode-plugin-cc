@@ -32,7 +32,7 @@ async function main() {
   const configPath = path.join(workspace, "models.json");
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf8");
 
-  const proc = spawn("node", [SERVER], {
+  const proc = spawn(process.execPath, [SERVER], {
     stdio: ["pipe", "pipe", "pipe"],
     env: {
       ...process.env,

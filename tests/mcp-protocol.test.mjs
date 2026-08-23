@@ -15,7 +15,7 @@ const SERVER = path.join(__dirname, "..", "plugins", "opencode", "mcp", "server.
  */
 function talkToServer(messages) {
   return new Promise((resolve, reject) => {
-    const proc = spawn("node", [SERVER], {
+    const proc = spawn(process.execPath, [SERVER], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, OC_MODELS_CONFIG: path.join(createTmpDir(), "unused.json") },
     });
@@ -120,7 +120,7 @@ describe("mcp-protocol (stdio)", () => {
 
   it("malformed JSON line yields parse error -32700", async () => {
     const res = await new Promise((resolve, reject) => {
-      const proc = spawn("node", [SERVER], { stdio: ["pipe", "pipe", "pipe"] });
+      const proc = spawn(process.execPath, [SERVER], { stdio: ["pipe", "pipe", "pipe"] });
       const timer = setTimeout(() => {
         proc.kill();
         reject(new Error("timeout"));
@@ -154,7 +154,7 @@ describe("mcp-protocol (stdio)", () => {
     fs.writeFileSync(badConfig, "{ broken", "utf8");
 
     const res = await new Promise((resolve, reject) => {
-      const proc = spawn("node", [SERVER], {
+      const proc = spawn(process.execPath, [SERVER], {
         stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, OC_MODELS_CONFIG: badConfig },
       });

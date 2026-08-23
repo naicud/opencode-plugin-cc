@@ -9,7 +9,7 @@ const HOOK = path.join(__dirname, "..", "plugins", "opencode", "scripts", "deleg
 
 function runHook(stdinPayload) {
   const input = typeof stdinPayload === "string" ? stdinPayload : JSON.stringify(stdinPayload);
-  return spawnSync("node", [HOOK], {
+  return spawnSync(process.execPath, [HOOK], {
     input,
     encoding: "utf8",
     timeout: 10_000,

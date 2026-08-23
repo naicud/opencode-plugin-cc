@@ -33,7 +33,7 @@ function fail(msg) {
 
 async function main() {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "oc-e2e-"));
-  const proc = spawn("node", [SERVER], {
+  const proc = spawn(process.execPath, [SERVER], {
     stdio: ["pipe", "pipe", "pipe"],
     env: process.env,
   });
