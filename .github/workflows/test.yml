@@ -8,6 +8,11 @@ on:
 jobs:
   unit:
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # bash expands the tests/*.test.mjs glob in the npm test script;
+        # PowerShell (the Windows default) would pass it through literally.
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
