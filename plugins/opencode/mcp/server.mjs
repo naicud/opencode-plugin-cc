@@ -10,6 +10,7 @@
 import readline from "node:readline";
 import path from "node:path";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   ensureServer,
   createClient,
@@ -1359,8 +1360,12 @@ async function main() {
   process.on("SIGTERM", shutdown);
 }
 
+// Direct-invocation guard. fileURLToPath is required for Windows: the naive
+// `new URL(import.meta.url).pathname` yields "/C:/..." which never equals a
+// resolved argv[1], so the server would silently start no stdio loop there.
 const invokedDirectly =
-  process.argv[1] && path.resolve(process.argv[1]) === new URL(import.meta.url).pathname;
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
 if (invokedDirectly) {
   main();
