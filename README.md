@@ -284,7 +284,7 @@ Wraps the OpenCode HTTP server API. Picks up config from:
 
 ## License
 
-Copyright 2026 OpenCode Plugin Contributors
+Copyright 2026 naicud. This is the canonical home and authoritative fork of this project.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -297,3 +297,7 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+This project is a derivative work of [codex-plugin-cc](https://github.com/openai/codex-plugin-cc)
+(© 2026 OpenAI, Apache-2.0). Per Apache-2.0 the upstream license and attribution are preserved
+in [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE), which also documents the modifications made here.

@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Use OpenCode from Claude Code to review code or delegate tasks.",
   "license": "Apache-2.0",
+  "author": "naicud",
   "engines": {
     "node": ">=18.18.0"
   },
