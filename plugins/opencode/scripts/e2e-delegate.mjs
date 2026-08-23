@@ -104,7 +104,7 @@ async function main() {
     /* 2. tools/list */
     const list = await rpc("tools/list", {});
     const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-    if (JSON.stringify(names) !== JSON.stringify(["abort", "delegate", "doctor", "fanOut", "models", "respond", "shutdown", "status", "wait", "waitAll"])) {
+    if (JSON.stringify(names) !== JSON.stringify(["abort", "delegate", "diff", "doctor", "fanOut", "models", "respond", "shutdown", "status", "wait", "waitAll"])) {
       return fail(`tools/list mismatch: ${names}`);
     }
     console.log("tools/list ok:", names.join(", "));
@@ -235,7 +235,9 @@ async function main() {
     }
     console.log(`doctor ok=${doc.ok}: ${doc.checks.length} checks`);
 
-    /* 8c. fanOut: two tiny tasks in parallel, then waitAll both to idle */
+    /* 8c. fanOut: two tasks in parallel across TWO workspaces (second task
+       gets a per-task cwd), then waitAll both to idle */
+    const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-e2e-other-"));
     const fan = parseResult(await rpc("tools/call", {
       name: "fanOut",
       arguments: {
@@ -244,7 +246,7 @@ async function main() {
         effort: "max",
         tasks: [
           "Crea il file fan-a.txt con contenuto ESATTAMENTE: FAN-A-OK. Aggiorna .oc-report.md.",
-          "Crea il file fan-b.txt con contenuto ESATTAMENTE: FAN-B-OK. Aggiorna .oc-report.md.",
+          { task: "Crea il file fan-b.txt con contenuto ESATTAMENTE: FAN-B-OK. Aggiorna .oc-report.md.", cwd: otherDir },
         ],
       },
     }));
@@ -257,12 +259,20 @@ async function main() {
       arguments: { sessionIDs: fan.jobs.map((j) => j.sessionID), cwd, timeoutSec: 180 },
     }));
     if ((fanWait.summary?.idle ?? 0) !== 2) return fail(`waitAll after fanOut: ${JSON.stringify(fanWait.summary)}`);
-    for (const [name, expected] of [["fan-a.txt", "FAN-A-OK"], ["fan-b.txt", "FAN-B-OK"]]) {
-      const p = path.join(cwd, name);
-      if (!fs.existsSync(p)) return fail(`fanOut artifact ${name} missing`);
+    for (const [dirPath, name, expected] of [
+      [cwd, "fan-a.txt", "FAN-A-OK"],
+      [otherDir, "fan-b.txt", "FAN-B-OK"],
+    ]) {
+      const p = path.join(dirPath, name);
+      if (!fs.existsSync(p)) {
+        const perSession = (fanWait.results ?? [])
+          .map((r) => `${(r.sessionID ?? "?").slice(0, 12)}:${r.status}:${String(r.response ?? r.error ?? "").slice(0, 220)}`)
+          .join(" | ");
+        return fail(`fanOut artifact ${name} missing in ${dirPath} — waitAll: ${JSON.stringify(fanWait.summary)} — ${perSession}`);
+      }
       if (fs.readFileSync(p, "utf8").trim() !== expected) return fail(`fanOut artifact ${name} wrong`);
     }
-    console.log("fanOut ok: 2 parallel tasks byte-exact via waitAll");
+    console.log("fanOut ok: cross-workspace parallel tasks byte-exact via waitAll");
 
     /* 8d. fanOut race mode: same task twice, first clean finish wins,
            the loser is aborted automatically */
@@ -324,7 +334,15 @@ async function main() {
     }
     console.log("port check ok: all stopped ports are free");
 
-    console.log("\nE2E PASS: full stdio flow verified (handshake, catalog, max-effort delegation, artifacts, report contract, abort, resume, doctor, fanOut+waitAll, race mode, clean shutdown).");
+    /* 8e. diff tool: scratch workspace is not a git repo → honest report */
+    const df = parseResult(await rpc("tools/call", {
+      name: "diff",
+      arguments: { sessionID: del.sessionID, cwd },
+    }));
+    if (df.isRepo !== false) return fail(`diff isRepo expected false: ${JSON.stringify(df).slice(0, 200)}`);
+    if (!/not a git repository/.test(df.note ?? "")) return fail(`diff note missing: ${df.note}`);
+
+    console.log("\nE2E PASS: full stdio flow verified (handshake, catalog, max-effort delegation, artifacts, report contract, abort, resume, doctor, fanOut+waitAll cross-workspace, race mode, diff, clean shutdown).");
   } catch (err) {
     fail(err.message);
   } finally {

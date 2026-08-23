@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **`diff` tool (workspace supervision)**: every delegate/fanOut job now snapshots the git HEAD
+  (`gitBase`) before starting; the new `diff` tool returns `git diff --stat` + changed/untracked
+  files since that snapshot — see exactly what the agent touched without leaving Claude.
+- **fanOut multi-workspace**: tasks may be objects `{task, cwd}` to delegate across DIFFERENT
+  repositories in parallel; each task gets its own server connection and job record in its
+  workspace state.
+- **cwd validation everywhere**: all tools validate `cwd` (absolute, exists, is a directory) with
+  structured errors `CWD_INVALID` / `CWD_NOT_ABSOLUTE` / `CWD_NOT_FOUND` / `CWD_NOT_DIRECTORY`.
+
 ## [1.8.0] - 2026-08-23
 
 ### Added

@@ -22,6 +22,7 @@ import {
 import { loadConfig, getCatalog, formatHint, formatCostTable } from "./lib/catalog.mjs";
 import { resolveSelection, buildModelSelector } from "./lib/resolve.mjs";
 import { createPermissionWatcher } from "./lib/permissions.mjs";
+import { snapshotGitHead, diffSinceSnapshot } from "./lib/workspace-diff.mjs";
 import { pickAccount, buildAuthContent, envKeyName, listAccounts } from "./lib/accounts.mjs";
 import { buildAgentConfigContent, validateAgentConfigContent, AGENT_NAME } from "./lib/agent.mjs";
 import { buildEscalation } from "./lib/escalation.mjs";
@@ -90,6 +91,36 @@ export function buildProgressEmitter(meta, opts = {}) {
 
 function shortId(sessionID) {
   return typeof sessionID === "string" ? sessionID.slice(0, 8) : "?";
+}
+
+/**
+ * Validate and resolve the workspace directory argument.
+ * Rejects non-strings, empty values, relative paths, and directories that do
+ * not exist. The path is returned UNCHANGED (no realpath) so state keys stay
+ * stable for callers that always pass the same spelling.
+ * @param {object} args
+ * @returns {string}
+ */
+function resolveCwd(args) {
+  const cwd = args?.cwd ?? process.cwd();
+  if (typeof cwd !== "string" || !cwd.trim()) {
+    throw Object.assign(new Error('cwd must be a non-empty string'), { code: "CWD_INVALID" });
+  }
+  if (!path.isAbsolute(cwd)) {
+    throw Object.assign(new Error(`cwd must be an absolute path: ${cwd}`), {
+      code: "CWD_NOT_ABSOLUTE",
+    });
+  }
+  let stat;
+  try {
+    stat = fs.statSync(cwd);
+  } catch {
+    throw Object.assign(new Error(`cwd does not exist: ${cwd}`), { code: "CWD_NOT_FOUND" });
+  }
+  if (!stat.isDirectory()) {
+    throw Object.assign(new Error(`cwd is not a directory: ${cwd}`), { code: "CWD_NOT_DIRECTORY" });
+  }
+  return cwd;
 }
 
 /** @type {Map<string, { client: object, watcher: object }>} keyed by baseUrl */
@@ -202,7 +233,7 @@ function renderContract(contract, cwd) {
 }
 
 async function toolDelegate(args) {
-  const cwd = args.cwd ?? process.cwd();
+  const cwd = resolveCwd(args);
   if (!args.task || typeof args.task !== "string") {
     throw Object.assign(new Error('delegate requires a non-empty "task" string'), {
       code: "TASK_REQUIRED",
@@ -328,6 +359,7 @@ async function toolDelegate(args) {
     tier: selection.model.tier ?? null,
     account,
     directory: cwd,
+    gitBase: snapshotGitHead(cwd),
     task: args.task,
     autoRetry,
     ...(resumedFrom ? { resumedFrom } : {}),
@@ -377,13 +409,6 @@ async function toolFanOut(args, meta) {
       code: "TASKS_TOO_MANY",
     });
   }
-  args.tasks.forEach((t, i) => {
-    if (!t || typeof t !== "string" || !t.trim()) {
-      throw Object.assign(new Error(`tasks[${i}] must be a non-empty string`), {
-        code: "TASKS_INVALID",
-      });
-    }
-  });
   if (args.titlePrefix != null && (typeof args.titlePrefix !== "string" || !args.titlePrefix.trim())) {
     throw Object.assign(new Error('fanOut: "titlePrefix" must be a non-empty string'), {
       code: "TITLE_PREFIX_INVALID",
@@ -396,7 +421,29 @@ async function toolFanOut(args, meta) {
     });
   }
 
-  const cwd = args.cwd ?? process.cwd();
+  // Per-task workspaces: items may be plain strings or {task, cwd?} objects
+  // for parallel delegation across DIFFERENT repositories.
+  const entries = args.tasks.map((t, i) => {
+    if (typeof t === "string") {
+      if (!t.trim()) {
+        throw Object.assign(new Error(`tasks[${i}] must be a non-empty string`), {
+          code: "TASKS_INVALID",
+        });
+      }
+      return { task: t.trim(), cwd: null };
+    }
+    if (t && typeof t === "object" && !Array.isArray(t) && typeof t.task === "string" && t.task.trim()) {
+      if (t.cwd != null) {
+        resolveCwd({ cwd: t.cwd }); // throws CWD_* on bad paths
+      }
+      return { task: t.task.trim(), cwd: t.cwd ?? null };
+    }
+    throw Object.assign(new Error(`tasks[${i}] must be a non-empty string or {task, cwd?} object`), {
+      code: "TASKS_INVALID",
+    });
+  });
+
+  const cwd = resolveCwd(args);
   const config = loadConfig();
   const jobsNow = loadState(cwd).jobs ?? [];
 
@@ -444,7 +491,8 @@ async function toolFanOut(args, meta) {
   const failed = [];
 
   for (let i = 0; i < n; i += 1) {
-    const task = args.tasks[i].trim();
+    const task = entries[i].task;
+    const taskCwd = entries[i].cwd ?? cwd;
     try {
       // Round-robin rotates per task when accounts are configured.
       let account = null;
@@ -452,36 +500,38 @@ async function toolFanOut(args, meta) {
         account =
           i === 0 && args.account !== undefined && args.account !== "auto"
             ? firstAccount
-            : pickAccount(config, cwd, args.account ?? "auto");
+            : pickAccount(config, taskCwd, args.account ?? "auto");
       }
-      const { client } = await getConnection(cwd, account);
+      const { client } = await getConnection(taskCwd, account);
       const session = await client.createSession({
         title: `${prefix} ${i + 1}/${n}: ${task.replace(/\s+/g, " ").slice(0, 60)}`,
       });
-      await client.sendPromptAsync(session.id, `${renderContract(config.contract, cwd)}\n---\n\n${task}`, {
+      await client.sendPromptAsync(session.id, `${renderContract(config.contract, taskCwd)}\n---\n\n${task}`, {
         agent,
         model: selector.model,
         variant: selection.variant,
       });
-      const job = createJobRecord(cwd, "delegate", {
+      const job = createJobRecord(taskCwd, "delegate", {
         sessionID: session.id,
         model: selection.model.id,
         variant: selection.variant ?? null,
         effortApplied: selection.effortApplied,
         tier: selection.model.tier ?? null,
         account,
-        directory: cwd,
+        directory: taskCwd,
+        gitBase: snapshotGitHead(taskCwd),
         task,
         autoRetry: false,
         fanOutId,
         fanOutIndex: i,
       });
-      upsertJob(cwd, { id: job.id, status: "running", phase: "delegated" });
+      upsertJob(taskCwd, { id: job.id, status: "running", phase: "delegated" });
       jobs.push({
         jobId: job.id,
         sessionID: session.id,
         index: i,
         account,
+        ...(entries[i].cwd ? { cwd: taskCwd } : {}),
         title: `${prefix} ${i + 1}/${n}`,
       });
     } catch (err) {
@@ -638,7 +688,7 @@ async function summarizeTodos(client, sessionId) {
 }
 
 async function toolWait(args, meta) {
-  const cwd = args.cwd ?? process.cwd();
+  const cwd = resolveCwd(args);
   const account = accountForSession(cwd, args.sessionID);
   const { client, watcher } = await getConnection(cwd, account);
   const timeoutSec = args.timeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC;
@@ -817,7 +867,7 @@ function retryChainDepth(cwd, job) {
 }
 
 async function toolStatus(args) {
-  const cwd = args.cwd ?? process.cwd();
+  const cwd = resolveCwd(args);
   // Batch mode: no sessionID → recent delegate jobs overview.
   if (!args.sessionID) {
     const jobs = (loadState(cwd).jobs ?? [])
@@ -907,14 +957,14 @@ async function toolWaitAll(args, meta) {
 }
 
 async function toolRespond(args) {
-  const cwd = args.cwd ?? process.cwd();
+  const cwd = resolveCwd(args);
   const client = await getClient(cwd, accountForSession(cwd, args.sessionID));
   const ok = await client.respondPermission(args.sessionID, args.permissionID, args.response);
   return { responded: Boolean(ok), permissionID: args.permissionID, response: args.response };
 }
 
 async function toolAbort(args) {
-  const cwd = args.cwd ?? process.cwd();
+  const cwd = resolveCwd(args);
   const client = await getClient(cwd, accountForSession(cwd, args.sessionID));
   await client.abortSession(args.sessionID);
   markJobBySession(cwd, args.sessionID, () => ({
@@ -1010,6 +1060,33 @@ function cancelRunningJobs(cwd, { account = null, sessionIDs = [] } = {}) {
  * Scope: current workspace by default; `account` narrows it; `all:true`
  * sweeps every workspace this plugin ever spawned servers for.
  */
+/**
+ * Show what a delegated agent changed in the workspace: git diff --stat
+ * against the HEAD snapshot recorded when the job was created, plus untracked
+ * files. Read-only; works even when the session already finished or aborted.
+ */
+async function toolDiff(args) {
+  if (!args.sessionID || typeof args.sessionID !== "string") {
+    throw Object.assign(new Error('diff requires "sessionID"'), { code: "SESSION_ID_REQUIRED" });
+  }
+  const cwd = resolveCwd(args);
+  let jobs;
+  try {
+    jobs = loadState(cwd).jobs ?? [];
+  } catch {
+    jobs = [];
+  }
+  const job = jobs.find((j) => j.type === "delegate" && j.sessionID === args.sessionID) ?? null;
+  const result = diffSinceSnapshot(cwd, { base: job?.gitBase ?? null });
+  return {
+    sessionID: args.sessionID,
+    jobId: job?.id ?? null,
+    model: job?.model ?? null,
+    status: job?.status ?? null,
+    ...result,
+  };
+}
+
 async function toolShutdown(args) {
   if (args.all != null && typeof args.all !== "boolean") {
     throw Object.assign(new Error('shutdown: "all" must be a boolean'), { code: "ALL_INVALID" });
@@ -1024,7 +1101,7 @@ async function toolShutdown(args) {
       code: "DELETE_SESSIONS_INVALID",
     });
   }
-  const cwd = args.cwd ?? process.cwd();
+  const cwd = resolveCwd(args);
   const scopeAll = args.all === true;
   const account = args.account ?? null;
   // Session GC: opt-in destructive cleanup. Only sessions referenced by
@@ -1171,13 +1248,13 @@ const TOOLS = [
     name: "fanOut",
     title: "Fan out tasks",
     description:
-      "Delegate MULTIPLE tasks in parallel with one call: same resolved model+variant for all, round-robin account rotation per task, shared fanOutId. Returns per-task jobId/sessionID; supervise the batch with waitAll.",
+      "Delegate MULTIPLE tasks in parallel with one call: same resolved model+variant for all, round-robin account rotation per task, shared fanOutId, optional per-task workspace (items may be strings or {task, cwd?} objects for cross-repo fan-out). Returns per-task jobId/sessionID; supervise the batch with waitAll.",
     annotations: { openWorldHint: true },
     inputSchema: {
       type: "object",
       required: ["tasks"],
       properties: {
-        tasks: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 12, description: "Task descriptions (same model+effort each)" },
+        tasks: { type: "array", items: { anyOf: [{ type: "string" }, { type: "object", properties: { task: { type: "string" }, cwd: { type: "string", description: "Per-task workspace directory (absolute)" } }, required: ["task"] }] }, minItems: 1, maxItems: 12, description: "Task descriptions; objects add a per-task workspace for parallel delegation across different repos (same model+effort each)" },
         mode: { type: "string", enum: ["batch", "race"], description: "batch (default): return immediately, supervise with waitAll. race: first task to finish cleanly wins, all others are aborted to save quota" },
         timeoutSec: { type: "number", description: "race mode shared deadline seconds (default 600)" },
         cwd: { type: "string", description: "Workspace directory" },
@@ -1231,6 +1308,21 @@ const TOOLS = [
       type: "object",
       properties: {
         sessionID: { type: "string", description: "Omit to list recent delegate jobs instead" },
+        cwd: { type: "string", description: "Workspace directory" },
+      },
+    },
+  },
+  {
+    name: "diff",
+    title: "Agent workspace changes",
+    description:
+      "Show what a delegated agent changed in the workspace since its job started: git diff --stat against the HEAD snapshot recorded at delegation time plus untracked files. Read-only; works after completion or abort. Non-git workspaces report isRepo:false with the porcelain status note.",
+    annotations: { readOnlyHint: true },
+    inputSchema: {
+      type: "object",
+      required: ["sessionID"],
+      properties: {
+        sessionID: { type: "string" },
         cwd: { type: "string", description: "Workspace directory" },
       },
     },
@@ -1302,6 +1394,7 @@ const TOOL_HANDLERS = {
   wait: toolWait,
   waitAll: toolWaitAll,
   status: toolStatus,
+  diff: toolDiff,
   respond: toolRespond,
   abort: toolAbort,
   shutdown: toolShutdown,
@@ -1313,7 +1406,7 @@ const TOOL_HANDLERS = {
  * a human-readable report block.
  */
 async function toolDoctor(args) {
-  const cwd = args.cwd ?? process.cwd();
+  const cwd = resolveCwd(args);
   const report = await runDiagnostics({ cwd, config: loadConfig(), checkBinaries: true });
   return {
     ok: report.ok,

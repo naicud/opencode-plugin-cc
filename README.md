@@ -27,7 +27,7 @@ they already have.
 - `/opencode:review` for a normal read-only OpenCode review
 - `/opencode:adversarial-review` for a steerable challenge review
 - `/opencode:rescue`, `/opencode:status`, `/opencode:result`, and `/opencode:cancel` to delegate work and manage background jobs
-- `/opencode:delegate` plus **ten MCP tools** (`models`, `delegate`, `fanOut`, `wait`, `waitAll`, `status`, `respond`, `abort`, `shutdown`, `doctor`) and `/opencode:parallel` for batch fan-out reachable as `mcp__plugin_opencode_oc__*` for tiered, budget-aware, multi-account delegation to OpenCode models with full supervision (permissions, escalation with optional auto-retry, retry chains, session resume), spend limits, and clean process lifecycle
+- `/opencode:delegate` plus **eleven MCP tools** (`models`, `delegate`, `fanOut`, `wait`, `waitAll`, `status`, `diff`, `respond`, `abort`, `shutdown`, `doctor`) and `/opencode:parallel` for batch fan-out reachable as `mcp__plugin_opencode_oc__*` for tiered, budget-aware, multi-account delegation to OpenCode models with full supervision (permissions, escalation with optional auto-retry, retry chains, session resume), spend limits, workspace-diff auditing, and clean process lifecycle
 
 ## Requirements
 
@@ -133,14 +133,15 @@ the Apache-2.0 license.
 
 ## Model Delegation (MCP)
 
-The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over stdio, zero npm deps) exposing **ten tools**, reachable as `mcp__plugin_opencode_oc__models|delegate|fanOut|wait|waitAll|status|respond|abort|shutdown|doctor`:
+The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over stdio, zero npm deps) exposing **eleven tools**, reachable as `mcp__plugin_opencode_oc__models|delegate|fanOut|wait|waitAll|status|diff|respond|abort|shutdown|doctor`:
 
 - **models** — merged catalog (file + live `/config/providers`) with tiers, variants, real costs (`costTable`: USD per Mtok in/out), effort policy, accounts overview and budget hint.
 - **delegate** — resolves model+variant client-side (the server accepts any variant string and silently falls back to base — see `docs/opencode-api-findings.md` P2), creates a titled session, fires `prompt_async` with the work contract from `config/models.json`, records a job visible to `status`. Extras: `retryOf` links a re-run to a failed/cancelled job, `resumeSessionID` continues an existing persisted session (crash recovery / multi-step), `account` routes quota across pooled accounts, `title` overrides the session name, `autoRetry: true` re-delegates ONCE at the escalation-suggested model+variant if the run dies with a retryable error (returns `status:"retried"` + new sessionID). Enforced guards: `config.concurrency.maxDelegates` cap and `config.budget` spend limits (`DELEGATE_LIMIT_EXCEEDED`, `BUDGET_JOB_MAX`, `BUDGET_DAILY_MAX`).
-- **fanOut** — batch parallelism: delegate up to 12 tasks with ONE call. Same resolved model+variant for every task; round-robin account rotation per task (quota amplification); one job record each under a shared `fanOutId`; mid-loop failures keep started tasks running and are reported (`started`/`failed`). Response includes ready-made `nextStep` waitAll guidance. **`mode:"race"`**: same task (or variants) to multiple sessions — the first clean completion wins, every other session is aborted and marked cancelled (`race-loser`); returns the winner's response + cost for quality-at-speed or cross-model comparison.
+- **fanOut** — batch parallelism: delegate up to 12 tasks with ONE call. Same resolved model+variant for every task; round-robin account rotation per task (quota amplification); one job record each under a shared `fanOutId`; mid-loop failures keep started tasks running and are reported (`started`/`failed`). Tasks may be plain strings or `{task, cwd}` objects — per-task workspaces enable cross-repo parallel delegation. Response includes ready-made `nextStep` waitAll guidance. **`mode:"race"`**: same task (or variants) to multiple sessions — the first clean completion wins, every other session is aborted and marked cancelled (`race-loser`); returns the winner's response + cost for quality-at-speed or cross-model comparison.
 - **wait** — polls every 5s; returns on idle, on pending permission (`needsInput`), or timeout (with `progress`: latest assistant text tail + todo counts). Responses carry `jobId`, `account` and a todo summary so no extra calls are needed. With `_meta.progressToken` it streams MCP progress frames carrying the live assistant output (SSE `message.part.updated` tracker; interval via `OPENCODE_PROGRESS_INTERVAL_MS`, default 15s).
 - **waitAll** — parallel supervision: wait on up to 12 sessions with one shared deadline; per-session results plus aggregate summary `{total, idle, needsInput, timeout, error}`.
 - **status** — with `sessionID`: non-blocking snapshot (failing sub-endpoints become `null`, never errors). Without: batch mode listing the 20 most recent delegate jobs (model, variant, account, tier, retry/resume lineage, errors, timestamps).
+- **diff** — workspace-diff auditing: every delegate/fanOut job snapshots the git HEAD (`gitBase`) at spawn; `diff {sessionID}` returns what the agent changed since — tracked diff `--stat`, changed-file list, untracked files from `git status`, clean flag, non-repo note. Supervision sees the blast radius without touching git yourself.
 - **respond** — answers a pending permission (`once` / `always` / `reject`). Auto-approve/auto-reject regexes live in `config/models.json`.
 - **abort** — kills a runaway session and marks the job cancelled.
 - **shutdown** — clean teardown of plugin-spawned servers: gracefully aborts busy sessions, SIGTERM→SIGKILL only the exact recorded pids (identity-checked against `ps`/PowerShell — foreign or recycled pids are refused, never signalled), marks their jobs cancelled. Default scope is the current workspace; `account` narrows it; `all:true` sweeps every workspace; `deleteSessions:true` additionally deletes terminal delegate sessions from OpenCode storage (opt-in GC). Leaves zero orphan processes — no `pkill` needed.
@@ -175,7 +176,7 @@ Reasoning-effort variants (`high`/`max`) bill reasoning tokens as **output** tok
 ### Testing
 
 ```bash
-npm test            # unit suite (227 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, escalation, job control, clean shutdown, agent injection, race validation, progress streaming
+npm test            # unit suite (244 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, escalation, job control, clean shutdown, agent injection, race validation, progress streaming, workspace diff + cwd validation
 npm run test:e2e    # full delegation round-trip against a real opencode server (needs auth)
 npm run test:stress # permission ask/deny, concurrency, server kill+restart recovery (needs auth)
 npm run test:multiaccount # round-robin rotation across two named credentials, per-account isolation, state persistence (needs auth)

@@ -156,7 +156,9 @@ test("shutdown tool validates argument types", async () => {
 });
 
 test("shutdown with nothing tracked returns empty report", async () => {
-  const res = await rpc("tools/call", { name: "shutdown", arguments: { cwd: ws("empty") } });
+  const dir = ws("empty");
+  fs.mkdirSync(dir, { recursive: true });
+  const res = await rpc("tools/call", { name: "shutdown", arguments: { cwd: dir } });
   assert.equal(res.result.isError, false);
   const out = resultOf(res);
   assert.equal(out.scope, "workspace");
@@ -168,6 +170,7 @@ test("shutdown with nothing tracked returns empty report", async () => {
 
 test("shutdown cleans stale registry entries for a workspace", async () => {
   const cwd = ws("f");
+  fs.mkdirSync(cwd, { recursive: true });
   recordServerEntry(cwd, { pid: 999999996, port: 4431, host: "127.0.0.1", account: null });
   const res = await rpc("tools/call", { name: "shutdown", arguments: { cwd } });
   assert.equal(res.result.isError, false);
