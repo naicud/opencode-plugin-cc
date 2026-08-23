@@ -10,6 +10,7 @@ import {
   isOffPeakNow,
   locateJsonError,
   formatHint,
+  formatCostTable,
 } from "../plugins/opencode/mcp/lib/catalog.mjs";
 
 let tmpDir;
@@ -108,6 +109,29 @@ describe("catalog", () => {
       assert.match(hint, /glm-5\.2/);
       assert.match(hint, /kimi-k3/);
       assert.match(hint, /In dubbio scendi di un tier/);
+    });
+  });
+
+  describe("formatCostTable", () => {
+    it("renders free and paid rows with tier + id", () => {
+      const rows = formatCostTable([
+        { id: "x-preview-f-free", tier: 0, available: true, cost: { input: 0, output: 0 } },
+        { id: "deepseek-v4-pro", tier: 2, available: true, cost: { input: 1.74, output: 3.84 } },
+      ]);
+      assert.deepEqual(rows, [
+        "tier 0 x-preview-f-free: free",
+        "tier 2 deepseek-v4-pro: $1.74/Mtok in · $3.84/Mtok out",
+      ]);
+    });
+
+    it("skips unclassified and unavailable entries", () => {
+      const rows = formatCostTable([
+        { id: "brand-new", tier: null, available: true, cost: { input: 1, output: 1 } },
+        { id: "kimi-k3", tier: 3, available: false, cost: { input: 3, output: 15 } },
+        { id: "glm-5.2", tier: 2, available: true, cost: {} },
+      ]);
+      assert.equal(rows.length, 1);
+      assert.match(rows[0], /tier 2 glm-5\.2: free/); // missing costs default to 0
     });
   });
 

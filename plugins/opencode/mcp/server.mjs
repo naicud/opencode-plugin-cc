@@ -12,7 +12,7 @@ import {
   ensureServer,
   createClient,
 } from "../scripts/lib/opencode-server.mjs";
-import { loadConfig, getCatalog, formatHint } from "./lib/catalog.mjs";
+import { loadConfig, getCatalog, formatHint, formatCostTable } from "./lib/catalog.mjs";
 import { resolveSelection, buildModelSelector } from "./lib/resolve.mjs";
 import { createPermissionWatcher } from "./lib/permissions.mjs";
 import { pickAccount, buildAuthContent, envKeyName, listAccounts } from "./lib/accounts.mjs";
@@ -95,6 +95,7 @@ async function toolModels(args) {
     accounts: listAccounts(config),
     offPeakWindowsUtc: ["01:00-04:00", "06:00-10:00"],
     hint: formatHint(config, catalog.models),
+    costTable: formatCostTable(catalog.models),
   };
 }
 

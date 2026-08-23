@@ -312,3 +312,22 @@ export function formatHint(config, models) {
   const budget = b.perMonth != null ? ` Budget ≈ $${b.perMonth}/mese ($${b.perWeek}/sett, $${b.per5h}/5h).` : "";
   return `${tiers}.${budget} In dubbio scendi di un tier.`;
 }
+
+/**
+ * Compact per-model cost table (USD per million tokens) for the `models` tool.
+ * Only tiered, available entries are listed; free models read as "free".
+ * @param {object[]} models - merged catalog entries
+ * @returns {string[]}
+ */
+export function formatCostTable(models) {
+  const rows = [];
+  for (const m of models ?? []) {
+    if (m.tier == null || m.available === false) continue;
+    const cin = Number(m.cost?.input ?? 0);
+    const cout = Number(m.cost?.output ?? 0);
+    const cost =
+      cin === 0 && cout === 0 ? "free" : `$${cin}/Mtok in · $${cout}/Mtok out`;
+    rows.push(`tier ${m.tier} ${m.id}: ${cost}`);
+  }
+  return rows.sort((a, b) => a.localeCompare(b));
+}
