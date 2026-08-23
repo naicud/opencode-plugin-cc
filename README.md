@@ -124,6 +124,7 @@ the Apache-2.0 license.
 - `/opencode:setup` -- Checks OpenCode install/auth, can enable/disable the review gate hook.
 - `/opencode:delegate` -- Delegates a task through the MCP delegation runtime with `--model <id>`, `--tier N` (0–3), `--effort max|high|off`, `--account <name|auto>`. The subagent `opencode-delegate` runs the delegate/wait/verify loop for you.
 - `/opencode:parallel` -- Fan out MULTIPLE tasks in one shot (`task1 ;; task2 ;; task3`, same flags as delegate): calls `fanOut` then supervises everything with `waitAll`, answers permissions, retries retryable failures, verifies artifacts, reports per-task.
+- `/opencode:cost` -- Delegation spend report: total/today, by model, by account, by day, budget limits and remaining allowance.
 
 ## Model Delegation (MCP)
 
@@ -131,7 +132,7 @@ The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over
 
 - **models** — merged catalog (file + live `/config/providers`) with tiers, variants, real costs (`costTable`: USD per Mtok in/out), effort policy, accounts overview and budget hint.
 - **delegate** — resolves model+variant client-side (the server accepts any variant string and silently falls back to base — see `docs/opencode-api-findings.md` P2), creates a titled session, fires `prompt_async` with the work contract from `config/models.json`, records a job visible to `status`. Extras: `retryOf` links a re-run to a failed/cancelled job, `resumeSessionID` continues an existing persisted session (crash recovery / multi-step), `account` routes quota across pooled accounts, `title` overrides the session name, `autoRetry: true` re-delegates ONCE at the escalation-suggested model+variant if the run dies with a retryable error (returns `status:"retried"` + new sessionID). Enforced guards: `config.concurrency.maxDelegates` cap and `config.budget` spend limits (`DELEGATE_LIMIT_EXCEEDED`, `BUDGET_JOB_MAX`, `BUDGET_DAILY_MAX`).
-- **fanOut** — batch parallelism: delegate up to 12 tasks with ONE call. Same resolved model+variant for every task; round-robin account rotation per task (quota amplification); one job record each under a shared `fanOutId`; mid-loop failures keep started tasks running and are reported (`started`/`failed`). Response includes ready-made `nextStep` waitAll guidance.
+- **fanOut** — batch parallelism: delegate up to 12 tasks with ONE call. Same resolved model+variant for every task; round-robin account rotation per task (quota amplification); one job record each under a shared `fanOutId`; mid-loop failures keep started tasks running and are reported (`started`/`failed`). Response includes ready-made `nextStep` waitAll guidance. **`mode:"race"`**: same task (or variants) to multiple sessions — the first clean completion wins, every other session is aborted and marked cancelled (`race-loser`); returns the winner's response + cost for quality-at-speed or cross-model comparison.
 - **wait** — polls every 5s; returns on idle, on pending permission (`needsInput`), or timeout (with `progress`: latest assistant text tail + todo counts). Responses carry `jobId`, `account` and a todo summary so no extra calls are needed.
 - **waitAll** — parallel supervision: wait on up to 12 sessions with one shared deadline; per-session results plus aggregate summary `{total, idle, needsInput, timeout, error}`.
 - **status** — with `sessionID`: non-blocking snapshot (failing sub-endpoints become `null`, never errors). Without: batch mode listing the 20 most recent delegate jobs (model, variant, account, tier, retry/resume lineage, errors, timestamps).
@@ -151,6 +152,15 @@ Tiers (curated in `plugins/opencode/config/models.json`; everything else enters 
 
 Effort is always `max` (strict chains in `variantPreference` — no silent downgrade; if a model lacks the variant the resolver reports `effortApplied: "none"` with a reason instead).
 
+### Server-side agent contract (root-cause reliability)
+
+Every spawned server receives an injected `oc-delegate` subagent via `OPENCODE_CONFIG_CONTENT`
+(prompt = delegation contract + hard rules: never push/commit, finish only after the verification
+command succeeds, `.oc-report.md` mandatory). `delegate`/`fanOut` run under it automatically and
+fall back to stock `build` (contract still prepended to the prompt) with an explicit `agentNote`
+when injection isn't possible. This fixes intermittent report-skips at the server level instead of
+relying on prompt compliance alone.
+
 `muse-spark-1.2-contributor-free` is excluded by design (training-data clause).
 
 ### Cost note
@@ -160,7 +170,7 @@ Reasoning-effort variants (`high`/`max`) bill reasoning tokens as **output** tok
 ### Testing
 
 ```bash
-npm test            # unit suite (201 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, escalation, job control, clean shutdown
+npm test            # unit suite (218 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, escalation, job control, clean shutdown, agent injection, race validation
 npm run test:e2e    # full delegation round-trip against a real opencode server (needs auth)
 npm run test:stress # permission ask/deny, concurrency, server kill+restart recovery (needs auth)
 npm run test:multiaccount # round-robin rotation across two named credentials, per-account isolation, state persistence (needs auth)

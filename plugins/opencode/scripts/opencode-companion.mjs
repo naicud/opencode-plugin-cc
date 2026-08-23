@@ -13,9 +13,9 @@ import { isOpencodeInstalled, getOpencodeVersion, spawnDetached } from "./lib/pr
 import { isServerRunning, ensureServer, createClient, connect, derivePort } from "./lib/opencode-server.mjs";
 import { resolveWorkspace } from "./lib/workspace.mjs";
 import { loadState, updateState, upsertJob, generateJobId, jobDataPath } from "./lib/state.mjs";
-import { buildStatusSnapshot, resolveResultJob, resolveCancelableJob, enrichJob } from "./lib/job-control.mjs";
+import { buildStatusSnapshot, resolveResultJob, resolveCancelableJob, enrichJob, buildCostSnapshot } from "./lib/job-control.mjs";
 import { createJobRecord, runTrackedJob, getClaudeSessionId } from "./lib/tracked-jobs.mjs";
-import { renderStatus, renderResult, renderReview, renderSetup } from "./lib/render.mjs";
+import { renderStatus, renderResult, renderReview, renderSetup, renderCost } from "./lib/render.mjs";
 import { buildReviewPrompt, buildTaskPrompt } from "./lib/prompts.mjs";
 import { getDiff, getStatus as getGitStatus } from "./lib/git.mjs";
 import { readJson } from "./lib/fs.mjs";
@@ -36,6 +36,7 @@ const handlers = {
   "task-worker": handleTaskWorker,
   "task-resume-candidate": handleTaskResumeCandidate,
   status: handleStatus,
+  cost: handleCost,
   result: handleResult,
   cancel: handleCancel,
 };
@@ -438,6 +439,19 @@ async function handleStatus(argv) {
 
   const snapshot = buildStatusSnapshot(state.jobs ?? [], workspace, { sessionId });
   console.log(renderStatus(snapshot));
+}
+
+async function handleCost(argv) {
+  const workspace = await resolveWorkspace();
+  const state = loadState(workspace);
+  let config = null;
+  try {
+    config = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, "config", "models.json"), "utf8"));
+  } catch {
+    // budget limits simply render as unset
+  }
+  const snapshot = buildCostSnapshot(state.jobs ?? [], config);
+  console.log(renderCost(snapshot));
 }
 
 async function handleResult(argv) {

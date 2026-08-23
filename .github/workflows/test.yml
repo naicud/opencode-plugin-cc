@@ -7,10 +7,11 @@ on:
 
 jobs:
   unit:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         node: [20, 22]
     steps:
       - uses: actions/checkout@v4
@@ -20,5 +21,6 @@ jobs:
       - name: Unit tests
         run: npm test
       - name: Syntax check all plugin scripts
+        if: runner.os != 'Windows'
         run: |
           find plugins -name '*.mjs' -print0 | xargs -0 -n1 node --check

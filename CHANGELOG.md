@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.7.0] - 2026-08-23
+
+### Added
+- **Server-side `oc-delegate` agent**: every spawned server now receives an injected subagent via
+  `OPENCODE_CONFIG_CONTENT` carrying the delegation contract plus hard rules (never push/commit,
+  finish only after verification succeeds, `.oc-report.md` mandatory). Delegations run under it
+  automatically, with graceful fallback to stock `build` + explicit `agentNote`. Root-cause fix for
+  intermittent report-skips.
+- **fanOut race mode** (`mode:"race"`): run the same goal across multiple sessions — the first
+  clean completion wins, all losers are aborted and marked `race-loser`; response carries the
+  winner's response + cost. `/opencode:parallel --race` exposes it.
+- **fanOut batch mode is now explicit** (`mode:"batch"` default; invalid values rejected with
+  `MODE_INVALID`).
+- **needsInput progress**: when `wait` returns a pending permission and assistant text already
+  exists, the response includes the latest text tail + todo counts.
+- **`retryPolicy.maxAutoRetries`** config (default 2) caps auto-retry escalation chains.
+- **`/opencode:cost`**: spend report from job history — total/today, by model/account/day,
+  budget limits and remaining allowance.
+- **Windows CI**: test matrix now runs ubuntu + windows on Node 20/22.
+
 ## [1.6.0] - 2026-08-23
 
 ### Added
