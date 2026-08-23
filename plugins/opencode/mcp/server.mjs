@@ -172,7 +172,10 @@ async function toolDelegate(args) {
     resumedFrom = args.resumeSessionID;
   } else {
     const session = await client.createSession({
-      title: args.task.replace(/\s+/g, " ").slice(0, 80),
+      title:
+        typeof args.title === "string" && args.title.trim()
+          ? args.title.replace(/\s+/g, " ").trim().slice(0, 80)
+          : args.task.replace(/\s+/g, " ").slice(0, 80),
     });
     sessionID = session.id;
   }
@@ -432,6 +435,7 @@ const TOOLS = [
         agent: { type: "string", description: "OpenCode agent (default build)" },
         retryOf: { type: "string", description: "Job id or id prefix of a failed/cancelled delegate job this run retries" },
         resumeSessionID: { type: "string", description: "Existing opencode session id to continue (crash recovery / multi-step) instead of creating a new session" },
+        title: { type: "string", description: "Optional session title override (default: first 80 chars of task)" },
       },
     },
   },
