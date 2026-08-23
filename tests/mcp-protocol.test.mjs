@@ -91,12 +91,12 @@ describe("mcp-protocol (stdio)", () => {
     assert.equal(res.result.serverInfo.name, "opencode-delegate");
   });
 
-  it("tools/list exposes exactly the eight delegation tools", async () => {
+  it("tools/list exposes exactly the nine delegation tools", async () => {
     const [res] = await talkToServer([
       { jsonrpc: "2.0", id: 2, method: "tools/list" },
     ]);
     const names = res.result.tools.map((t) => t.name).sort();
-    assert.deepEqual(names, ["abort", "delegate", "models", "respond", "shutdown", "status", "wait", "waitAll"]);
+    assert.deepEqual(names, ["abort", "delegate", "doctor", "models", "respond", "shutdown", "status", "wait", "waitAll"]);
     for (const tool of res.result.tools) {
       assert.ok(tool.description, `tool ${tool.name} missing description`);
       assert.ok(tool.inputSchema, `tool ${tool.name} missing inputSchema`);

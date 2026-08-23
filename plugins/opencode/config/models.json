@@ -6,6 +6,10 @@
     "strategy": "round-robin",
     "default": null
   },
+  "concurrency": {
+    "maxDelegates": 8
+  },
+  "budget": {},
   "syncedAt": "2026-08-22T17:01:46.118Z",
   "defaults": {
     "tier": 0,

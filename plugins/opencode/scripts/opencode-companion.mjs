@@ -10,7 +10,7 @@ import fs from "node:fs";
 
 import { parseArgs, extractTaskText } from "./lib/args.mjs";
 import { isOpencodeInstalled, getOpencodeVersion, spawnDetached } from "./lib/process.mjs";
-import { isServerRunning, ensureServer, createClient, connect } from "./lib/opencode-server.mjs";
+import { isServerRunning, ensureServer, createClient, connect, derivePort } from "./lib/opencode-server.mjs";
 import { resolveWorkspace } from "./lib/workspace.mjs";
 import { loadState, updateState, upsertJob, generateJobId, jobDataPath } from "./lib/state.mjs";
 import { buildStatusSnapshot, resolveResultJob, resolveCancelableJob, enrichJob } from "./lib/job-control.mjs";
@@ -64,15 +64,20 @@ async function handleSetup(argv) {
   const installed = await isOpencodeInstalled();
   const version = installed ? await getOpencodeVersion() : null;
 
+  // Resolve the workspace up front so the server probe and provider listing
+  // hit the same derived port ensureServer() uses for this cwd (CA-16).
+  const workspace = await resolveWorkspace();
+  const port = derivePort(workspace);
+
   let serverRunning = false;
   let providers = [];
 
   if (installed) {
-    serverRunning = await isServerRunning();
+    serverRunning = await isServerRunning(undefined, port);
 
     if (serverRunning) {
       try {
-        const client = createClient("http://127.0.0.1:4096");
+        const client = createClient(`http://127.0.0.1:${port}`);
         const providerList = await client.listProviders();
         if (Array.isArray(providerList)) {
           providers = providerList.map((p) => p.id ?? p.name).filter(Boolean);
@@ -84,7 +89,6 @@ async function handleSetup(argv) {
   }
 
   // Handle review gate toggle
-  const workspace = await resolveWorkspace();
   let reviewGate = false;
 
   if (options["enable-review-gate"]) {
@@ -262,6 +266,7 @@ async function handleTask(argv) {
   const job = createJobRecord(workspace, "task", {
     agent: agentName,
     resumeSessionId,
+    model: options.model ?? null,
   });
 
   // Background mode: spawn a detached worker
@@ -304,10 +309,11 @@ async function handleTask(argv) {
       const prompt = buildTaskPrompt(taskText, { write: isWrite });
 
       report("investigating", "Sending task to OpenCode...");
-      log(`Agent: ${agentName}, Write: ${isWrite}, Prompt: ${prompt.length} chars`);
+      log(`Agent: ${agentName}, Model: ${options.model ?? "(default)"}, Write: ${isWrite}, Prompt: ${prompt.length} chars`);
 
       const response = await client.sendPrompt(sessionId, prompt, {
         agent: agentName,
+        model: options.model,
       });
 
       report("finalizing", "Processing task output...");
@@ -354,6 +360,7 @@ async function handleTaskWorker(argv) {
   const agentName = options.agent ?? "build";
   const isWrite = !!options.write;
   const resumeSessionId = options["resume-session"];
+  const modelName = options.model;
 
   if (!workspace || !jobId || !taskText) {
     process.exit(1);
@@ -376,10 +383,11 @@ async function handleTaskWorker(argv) {
       upsertJob(workspace, { id: jobId, opencodeSessionId: sessionId });
 
       const prompt = buildTaskPrompt(taskText, { write: isWrite });
-      report("investigating", "Running task...");
+      report("investigating", `Running task... (agent: ${agentName}, model: ${modelName ?? "default"})`);
 
       const response = await client.sendPrompt(sessionId, prompt, {
         agent: agentName,
+        model: modelName,
       });
 
       const text = extractResponseText(response);
@@ -484,7 +492,7 @@ async function handleCancel(argv) {
   const sessionId = job.opencodeSessionId ?? job.sessionID;
   if (sessionId) {
     try {
-      const client = createClient("http://127.0.0.1:4096");
+      const client = createClient(`http://127.0.0.1:${derivePort(workspace)}`);
       await client.abortSession(sessionId);
     } catch {
       // Server may not be running

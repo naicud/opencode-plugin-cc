@@ -5,9 +5,15 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn, execSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { stateRoot } from "./state.mjs";
 import { writeJson } from "./fs.mjs";
+import {
+  isProcessAlive,
+  getProcessCommand,
+  looksLikeOpcodeserve,
+  stopProcessTree,
+} from "./process-identity.mjs";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 4096;
@@ -33,6 +39,29 @@ export function derivePort(cwd, account) {
   const seed = account ? `${cwd}\u0000${account}` : cwd;
   const hash = crypto.createHash("sha256").update(seed).digest("hex");
   return DERIVED_PORT_BASE + (parseInt(hash.slice(0, 12), 16) % DERIVED_PORT_SPAN);
+}
+
+/**
+ * Normalize a model selector into the nested {providerID, modelID} object the
+ * OpenCode prompt API requires (findings P1+P2). Accepts an already-shaped
+ * object or a "provider/model" string; a bare model id is rejected because
+ * OpenCode cannot resolve it to a provider.
+ * @param {{providerID: string, modelID: string}|string|null} [model]
+ * @returns {{providerID: string, modelID: string}|null|undefined}
+ */
+export function normalizeModelSpec(model) {
+  if (model == null) return model;
+  if (typeof model === "object") {
+    if (!model.providerID || !model.modelID) {
+      throw new Error(`model selector object needs both providerID and modelID, got ${JSON.stringify(model)}`);
+    }
+    return model;
+  }
+  const slash = model.indexOf("/");
+  if (slash <= 0 || slash === model.length - 1) {
+    throw new Error(`--model must look like "provider/model", got "${model}"`);
+  }
+  return { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) };
 }
 
 /**
@@ -172,27 +201,10 @@ export function readServerRegistry(cwd) {
     .filter((e) => e && typeof e.pid === "number" && typeof e.port === "number");
 }
 
-function isProcessAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return err?.code === "EPERM"; // alive but owned by another user
-  }
-}
-
-function processCommand(pid) {
-  try {
-    return execSync(`ps -p ${pid} -o command=`, { encoding: "utf8" }).trim();
-  } catch {
-    return "";
-  }
-}
-
 /**
- * Stop ONE tracked server entry. The pid is only signalled after verifying via
- * `ps` that the command line matches an opencode serve process — foreign or
- * recycled pids are refused, never killed.
+ * Stop ONE tracked server entry. The pid is only signalled after verifying the
+ * command line matches an opencode serve process (cross-platform check via
+ * process-identity) — foreign or recycled pids are refused, never killed.
  * @param {object} entry - registry entry ({ pid, port, ... })
  * @returns {Promise<{ outcome: "stopped"|"alreadyDead"|"refused"|"failed", reason?: string }>}
  */
@@ -203,33 +215,20 @@ export async function stopServerEntry(entry) {
   if (!isProcessAlive(entry.pid)) {
     return { outcome: "alreadyDead" };
   }
-  const cmd = processCommand(entry.pid);
-  if (!/\bopencode\b/.test(cmd) || /\bserve\b/.test(cmd) === false) {
+  const cmd = getProcessCommand(entry.pid);
+  if (!looksLikeOpcodeserve(cmd)) {
     return {
       outcome: "refused",
       reason: `pid ${entry.pid} is not an opencode serve process (${cmd.slice(0, 100) || "no cmdline"})`,
     };
   }
-  try {
-    process.kill(entry.pid, "SIGTERM");
-  } catch {
-    return { outcome: "alreadyDead" };
-  }
-  const deadline = Date.now() + STOP_GRACE_TIMEOUT;
-  while (Date.now() < deadline && isProcessAlive(entry.pid)) {
-    await sleep(200);
-  }
-  if (isProcessAlive(entry.pid)) {
-    try {
-      process.kill(entry.pid, "SIGKILL");
-    } catch {
-      // lost the race with its own exit — fine
-    }
-    await sleep(300);
-  }
-  return isProcessAlive(entry.pid)
-    ? { outcome: "failed", reason: `pid ${entry.pid} survived SIGKILL` }
-    : { outcome: "stopped" };
+  const res = await stopProcessTree(entry.pid, { graceMs: STOP_GRACE_TIMEOUT });
+  if (res.outcome === "stopped") return res;
+  if (res.outcome === "alreadyDead") return res;
+  return {
+    outcome: res.outcome,
+    ...(res.reason ? { reason: res.reason } : { reason: `pid ${entry.pid} ${res.outcome}` }),
+  };
 }
 
 /**
@@ -399,7 +398,8 @@ export function createClient(baseUrl, opts = {}) {
         parts: [{ type: "text", text: promptText }],
       };
       if (opts.agent) body.agent = opts.agent;
-      if (opts.model) body.model = opts.model;
+      const model = normalizeModelSpec(opts.model);
+      if (model) body.model = model;
       if (opts.system) body.system = opts.system;
 
       const res = await fetch(`${baseUrl}/session/${sessionId}/message`, {
@@ -427,7 +427,8 @@ export function createClient(baseUrl, opts = {}) {
         parts: [{ type: "text", text: promptText }],
       };
       if (opts.agent) body.agent = opts.agent;
-      if (opts.model) body.model = opts.model;
+      const model = normalizeModelSpec(opts.model);
+      if (model) body.model = model;
       if (opts.variant) body.variant = opts.variant;
       return request("POST", `/session/${sessionId}/prompt_async`, body);
     },

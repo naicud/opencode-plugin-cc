@@ -2,7 +2,8 @@
 // JSON-RPC 2.0 over stdio, one message per line, zero npm dependencies.
 // Methods: initialize, tools/list, tools/call; anything else with an id → -32601.
 //
-// Eight tools: models, delegate, wait, waitAll, status, respond, abort, shutdown.
+// Nine tools: models, delegate, wait, waitAll, status, respond, abort,
+// shutdown, doctor.
 // Reachable from Claude Code as mcp__plugin_opencode_oc__<tool> (plugin name
 // is "opencode", server key in .mcp.json is "oc").
 
@@ -22,6 +23,8 @@ import { resolveSelection, buildModelSelector } from "./lib/resolve.mjs";
 import { createPermissionWatcher } from "./lib/permissions.mjs";
 import { pickAccount, buildAuthContent, envKeyName, listAccounts } from "./lib/accounts.mjs";
 import { buildEscalation } from "./lib/escalation.mjs";
+import { checkBudget, summarizeBudget } from "./lib/budget.mjs";
+import { runDiagnostics, formatDoctorReport } from "../scripts/lib/doctor.mjs";
 import { createJobRecord } from "../scripts/lib/tracked-jobs.mjs";
 import { loadState, upsertJob, stateBase } from "../scripts/lib/state.mjs";
 
@@ -101,6 +104,7 @@ async function toolModels(args) {
     offPeakWindowsUtc: ["01:00-04:00", "06:00-10:00"],
     hint: formatHint(config, catalog.models),
     costTable: formatCostTable(catalog.models),
+    budget: summarizeBudget(config, loadState(args.cwd ?? process.cwd()).jobs ?? []),
   };
 }
 
@@ -146,6 +150,35 @@ async function toolDelegate(args) {
   const accountsBlock = config.accounts;
   if (accountsBlock?.names?.length > 0) {
     account = pickAccount(config, cwd, args.account);
+  }
+
+  if (args.autoRetry != null && typeof args.autoRetry !== "boolean") {
+    throw Object.assign(new Error('delegate: "autoRetry" must be a boolean'), {
+      code: "AUTO_RETRY_INVALID",
+    });
+  }
+  const autoRetry = args.autoRetry === true;
+
+  const jobsNow = loadState(cwd).jobs ?? [];
+
+  // Concurrency cap: protect quotas from runaway fan-outs (waitAll x N).
+  const cap = Number(config.concurrency?.maxDelegates);
+  if (Number.isFinite(cap) && cap > 0) {
+    const running = jobsNow.filter((j) => j.type === "delegate" && j.status === "running").length;
+    if (running >= cap) {
+      throw Object.assign(
+        new Error(
+          `delegate limit reached: ${running}/${cap} delegate jobs already running (config.concurrency.maxDelegates); wait or abort one first`
+        ),
+        { code: "DELEGATE_LIMIT_EXCEEDED" }
+      );
+    }
+  }
+
+  // Budget guard: refuse work that would exceed configured spend limits.
+  const verdict = checkBudget(config, jobsNow);
+  if (!verdict.ok) {
+    throw Object.assign(new Error(verdict.reason), { code: verdict.code });
   }
 
   // Resolve BEFORE spawning anything so bad requests fail fast and cheaply.
@@ -202,6 +235,8 @@ async function toolDelegate(args) {
     tier: selection.model.tier ?? null,
     account,
     directory: cwd,
+    task: args.task,
+    autoRetry,
     ...(resumedFrom ? { resumedFrom } : {}),
     ...(retryTarget
       ? { retryOf: retryTarget.id, retryOfSession: retryTarget.sessionID ?? null }
@@ -312,15 +347,53 @@ async function toolWait(args) {
         continue;
       }
       if (outcome?.info?.error) {
-        markJobBySession(cwd, args.sessionID, (job) => ({
+        const esc = buildEscalation(outcome.info.error, loadConfig(), outcome.info.modelID);
+
+        // Auto-retry (one shot per original delegation): re-delegate the same
+        // task at the escalation-suggested model/variant.
+        if (esc?.retryable && job?.autoRetry && !job.autoRetriedAs && retryChainDepth(cwd, job) < 2) {
+          try {
+            const retried = await toolDelegate({
+              task: job.task ?? args.task ?? undefined,
+              cwd,
+              ...(esc.suggestModel ? { model: esc.suggestModel } : {}),
+              effort: esc.suggestVariant ?? "max",
+              ...(account ? { account } : {}),
+              retryOf: job.id,
+            });
+            markJobBySession(cwd, args.sessionID, () => ({
+              status: "failed",
+              errorMessage: outcome.info.error?.data?.message ?? "unknown error",
+              completedAt: new Date().toISOString(),
+              autoRetriedAs: retried.jobId,
+              autoRetrySession: retried.sessionID,
+            }));
+            return {
+              status: "retried",
+              sessionID: args.sessionID,
+              jobId: job?.id ?? null,
+              retryJobId: retried.jobId,
+              newSessionID: retried.sessionID,
+              modelRef: retried.modelRef,
+              variant: retried.variant,
+              reason: esc.reason ?? "retryable failure escalated automatically",
+              originalError: outcome.info.error,
+            };
+          } catch {
+            // fall through to the plain failed return below
+          }
+        }
+
+        markJobBySession(cwd, args.sessionID, () => ({
           status: "failed",
           errorMessage: outcome.info.error?.data?.message ?? "unknown error",
           completedAt: new Date().toISOString(),
         }));
       } else {
-        markJobBySession(cwd, args.sessionID, (job) => ({
+        markJobBySession(cwd, args.sessionID, () => ({
           status: "completed",
           completedAt: new Date().toISOString(),
+          ...(Number.isFinite(outcome?.info?.cost) ? { cost: outcome.info.cost } : {}),
         }));
       }
       return {
@@ -354,8 +427,33 @@ async function toolWait(args) {
         ...(progress?.text ? { progress: { tail: progress.text.slice(-300), todos: await summarizeTodos(client, args.sessionID) } } : {}),
       };
     }
-    await new Promise((r) => setTimeout(r, WAIT_POLL_INTERVAL_MS));
+    // Sleep the poll interval, but wake instantly when a session.idle SSE
+    // event arrives for this session (watcher consumes /event already).
+    await Promise.race([
+      new Promise((r) => setTimeout(r, WAIT_POLL_INTERVAL_MS)),
+      watcher.waitForIdle(args.sessionID, WAIT_POLL_INTERVAL_MS).catch(() => false),
+    ]);
   }
+}
+
+/**
+ * Length of the retryOf chain ending at this job (capped walk).
+ * @param {string} cwd
+ * @param {object} job
+ * @returns {number}
+ */
+function retryChainDepth(cwd, job) {
+  let depth = 0;
+  let current = job;
+  const seen = new Set();
+  while (current?.retryOf && depth < 5 && !seen.has(current.id)) {
+    seen.add(current.id);
+    const prev = (loadState(cwd).jobs ?? []).find((j) => j.id === current.retryOf);
+    if (!prev) break;
+    depth += 1;
+    current = prev;
+  }
+  return depth;
 }
 
 async function toolStatus(args) {
@@ -377,6 +475,7 @@ async function toolStatus(args) {
         retryOf: j.retryOf ?? null,
         resumedFrom: j.resumedFrom ?? null,
         errorMessage: j.errorMessage ?? null,
+        cost: Number.isFinite(j.cost) ? j.cost : null,
         createdAt: j.createdAt ?? null,
         completedAt: j.completedAt ?? null,
       }));
@@ -560,9 +659,18 @@ async function toolShutdown(args) {
       code: "ACCOUNT_INVALID",
     });
   }
+  if (args.deleteSessions != null && typeof args.deleteSessions !== "boolean") {
+    throw Object.assign(new Error('shutdown: "deleteSessions" must be a boolean'), {
+      code: "DELETE_SESSIONS_INVALID",
+    });
+  }
   const cwd = args.cwd ?? process.cwd();
   const scopeAll = args.all === true;
   const account = args.account ?? null;
+  // Session GC: opt-in destructive cleanup. Only sessions referenced by
+  // TERMINAL delegate jobs of the target workspaces are deleted — never
+  // running ones, never sessions the plugin does not know about.
+  const deleteSessions = args.deleteSessions === true;
 
   // Collect target registry entries grouped by their owning workspace.
   let targets; // Array<{ cwd, entry }>
@@ -582,6 +690,7 @@ async function toolShutdown(args) {
   const failed = [];
   const abortedSessions = [];
   let jobsCancelled = 0;
+  let deletedSessions = 0;
 
   for (const target of targets) {
     const baseUrl = `http://${target.entry.host ?? "127.0.0.1"}:${target.entry.port}`;
@@ -590,6 +699,29 @@ async function toolShutdown(args) {
       abortedSessions.push(...(await abortBusySessions(baseUrl, target.cwd)));
     } catch {
       // server unreachable: proceed to process cleanup anyway
+    }
+    // 1b) opt-in session GC for terminal delegate jobs of this workspace
+    if (deleteSessions) {
+      const sids = new Set(
+        (loadState(target.cwd).jobs ?? [])
+          .filter(
+            (j) =>
+              j.type === "delegate" &&
+              j.sessionID &&
+              j.status !== "running" &&
+              (!account || j.account === account)
+          )
+          .map((j) => j.sessionID)
+          .filter((sid) => !abortedSessions.includes(sid))
+      );
+      for (const sid of sids) {
+        try {
+          await createClient(baseUrl, { directory: target.cwd }).deleteSession(sid);
+          deletedSessions += 1;
+        } catch {
+          // session already gone or endpoint hiccup: not fatal
+        }
+      }
     }
     // 2) drop any live connection + watcher bound to this server
     for (const [url, conn] of [...connections]) {
@@ -627,6 +759,7 @@ async function toolShutdown(args) {
   return {
     scope: scopeAll ? "all" : "workspace",
     ...(account ? { account } : {}),
+    ...(deleteSessions ? { deletedSessions } : {}),
     stopped,
     alreadyDead,
     refused,
@@ -670,6 +803,7 @@ const TOOLS = [
         retryOf: { type: "string", description: "Job id or id prefix of a failed/cancelled delegate job this run retries" },
         resumeSessionID: { type: "string", description: "Existing opencode session id to continue (crash recovery / multi-step) instead of creating a new session" },
         title: { type: "string", description: "Optional session title override (default: first 80 chars of task)" },
+        autoRetry: { type: "boolean", description: "On retryable failure (quota/rate/5xx), automatically re-delegate once at the escalation-suggested model+variant and return status 'retried' with the new sessionID" },
       },
     },
   },
@@ -751,7 +885,7 @@ const TOOLS = [
     name: "shutdown",
     title: "Shutdown delegate servers",
     description:
-      "Cleanly stop OpenCode servers spawned by this plugin: gracefully aborts busy sessions, kills ONLY the exact tracked processes (ps identity-checked — foreign pids are refused), marks their jobs cancelled. Leaves zero orphan processes. Default scope: current workspace; account narrows it; all:true sweeps every workspace.",
+      "Cleanly stop OpenCode servers spawned by this plugin: gracefully aborts busy sessions, kills ONLY the exact tracked processes (ps identity-checked — foreign pids are refused), marks their jobs cancelled. Leaves zero orphan processes. Default scope: current workspace; account narrows it; all:true sweeps every workspace. deleteSessions:true additionally deletes the terminal delegate sessions (opt-in GC).",
     annotations: { destructiveHint: true, idempotentHint: true },
     inputSchema: {
       type: "object",
@@ -759,6 +893,20 @@ const TOOLS = [
         cwd: { type: "string", description: "Workspace directory (default scope)" },
         account: { type: "string", description: "Only stop servers bound to this account" },
         all: { type: "boolean", description: "Stop plugin-spawned servers across ALL workspaces" },
+        deleteSessions: { type: "boolean", description: "Also DELETE terminal delegate sessions from OpenCode storage (destructive, opt-in)" },
+      },
+    },
+  },
+  {
+    name: "doctor",
+    title: "Diagnostics",
+    description:
+      "Run environment diagnostics for the delegation plugin: opencode binary on PATH, node version, auth env vars (legacy + per-account), derived port health, server registry state (stale entries cleaned automatically), state dir writability.",
+    annotations: { readOnlyHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        cwd: { type: "string", description: "Workspace directory" },
       },
     },
   },
@@ -773,7 +921,24 @@ const TOOL_HANDLERS = {
   respond: toolRespond,
   abort: toolAbort,
   shutdown: toolShutdown,
+  doctor: toolDoctor,
 };
+
+/**
+ * Environment diagnostics rendered for the supervisor: structured checks plus
+ * a human-readable report block.
+ */
+async function toolDoctor(args) {
+  const cwd = args.cwd ?? process.cwd();
+  const report = await runDiagnostics({ cwd, config: loadConfig(), checkBinaries: true });
+  return {
+    ok: report.ok,
+    platform: report.platform,
+    node: report.node,
+    checks: report.checks,
+    report: formatDoctorReport(report),
+  };
+}
 
 /* -------------------------------- json-rpc -------------------------------- */
 

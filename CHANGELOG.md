@@ -3,6 +3,32 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.5.0] - 2026-08-23
+
+### Added
+- **`doctor` tool**: environment diagnostics in one call — opencode binary, node version,
+  legacy/per-account auth env vars, derived-port health, registry state (stale entries
+  auto-cleaned), state-dir writability; structured checks + rendered report.
+- **Budget enforcement**: `config.budget` (`maxJobCostUsd`, `maxDailyCostUsd`) — `delegate`
+  refuses work that would exceed limits; completed jobs record their real cost (summed from
+  assistant messages); `models` returns a live budget summary.
+- **Concurrency cap**: `config.concurrency.maxDelegates` guards against runaway fan-outs
+  (`DELEGATE_LIMIT_EXCEEDED`).
+- **Auto-retry**: `delegate autoRetry:true` — on a retryable failure the task is re-delegated
+  once at the escalation-suggested model+variant (`wait` returns `status:"retried"` with the
+  new sessionID).
+- **SSE instant idle wake**: `wait` no longer rides out the full 5s poll — the permission
+  watcher now dispatches all event types and wakes waiters on `session.idle`
+  (also fixes `permission.v2.replied` never being consumed live).
+- **Cross-platform clean kill**: identity checks moved to `process-identity.mjs` — Windows
+  supported via PowerShell CIM command-line lookup; stricter `opencode … serve … --port`
+  matcher.
+- **Session GC**: `shutdown deleteSessions:true` deletes terminal delegate sessions from
+  OpenCode storage (opt-in, never touches running or unknown sessions).
+- **Debt fixed**: `/opencode:rescue --model` now reaches the request as a normalized
+  `{providerID, modelID}` object (`normalizeModelSpec`); `handleSetup`/`handleCancel` use the
+  derived per-workspace port instead of hardcoded 4096.
+
 ## [1.4.0] - 2026-08-23
 
 ### Added

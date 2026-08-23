@@ -69,8 +69,26 @@ export function createPermissionWatcher(opts) {
       : () => configOrGetter?.permissions ?? {};
   /** @type {Map<string, object>} */
   const pending = new Map();
+  /** @type {Map<string, Set<() => void>>} sessionID -> idle waiters */
+  const idleWaiters = new Map();
   let running = false;
   let loopPromise = null;
+
+  function notifyIdle(sessionID) {
+    const set = idleWaiters.get(sessionID);
+    if (!set) return;
+    idleWaiters.delete(sessionID);
+    for (const fn of set) fn();
+  }
+
+  function handleIdle(event) {
+    // Live event type from findings P6: session.idle fires when a session
+    // finishes its turn. Used by the wait tool to wake instantly instead of
+    // riding out the full poll interval.
+    if (event?.type !== "session.idle") return;
+    const sid = event.properties?.sessionID ?? event.properties?.info?.sessionID;
+    if (sid) notifyIdle(sid);
+  }
 
   function handleEvent(event) {
     if (event?.type !== "permission.v2.asked") return;
@@ -95,11 +113,17 @@ export function createPermissionWatcher(opts) {
     if (props?.id) pending.delete(props.id);
   }
 
+  function dispatchEvent(event) {
+    handleEvent(event);
+    handleReply(event);
+    handleIdle(event);
+  }
+
   async function loop() {
     while (running) {
       try {
         const stream = await client.subscribeEvents();
-        await consumeSseStream(stream, handleEvent);
+        await consumeSseStream(stream, dispatchEvent);
       } catch {
         // server gone / network error: fall through to retry
       }
@@ -123,7 +147,33 @@ export function createPermissionWatcher(opts) {
     },
     async stop() {
       running = false;
+      for (const set of idleWaiters.values()) set.clear();
+      idleWaiters.clear();
       await loopPromise;
+    },
+    /**
+     * Resolve true as soon as a session.idle SSE event arrives for the given
+     * session, false when timeoutMs elapses first. Never throws.
+     * @param {string} sessionID
+     * @param {number} [timeoutMs]
+     * @returns {Promise<boolean>}
+     */
+    waitForIdle(sessionID, timeoutMs = 5000) {
+      return new Promise((resolve) => {
+        let settled = false;
+        const set = idleWaiters.get(sessionID) ?? new Set();
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          set.delete(finish);
+          if (!set.size) idleWaiters.delete(sessionID);
+          resolve(value);
+        };
+        const timer = setTimeout(() => finish(false), Math.max(1, timeoutMs));
+        set.add(finish);
+        idleWaiters.set(sessionID, set);
+      });
     },
     /**
      * Pending permission requests, optionally filtered by session.

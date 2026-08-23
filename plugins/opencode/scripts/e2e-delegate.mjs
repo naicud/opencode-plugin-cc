@@ -99,7 +99,7 @@ async function main() {
     /* 2. tools/list */
     const list = await rpc("tools/list", {});
     const names = (list.result?.tools ?? []).map((t) => t.name).sort();
-    if (JSON.stringify(names) !== JSON.stringify(["abort", "delegate", "models", "respond", "shutdown", "status", "wait", "waitAll"])) {
+    if (JSON.stringify(names) !== JSON.stringify(["abort", "delegate", "doctor", "models", "respond", "shutdown", "status", "wait", "waitAll"])) {
       return fail(`tools/list mismatch: ${names}`);
     }
     console.log("tools/list ok:", names.join(", "));
@@ -210,6 +210,13 @@ async function main() {
     if (!fs.existsSync(resumeProof)) return fail("resume artifact resume-proof.txt not created");
     if (fs.readFileSync(resumeProof, "utf8").trim() !== "RESUME-OK") return fail("resume artifact content wrong");
     console.log("resume ok: continued session produced resume-proof.txt (RESUME-OK)");
+
+    /* 8b. doctor diagnostics */
+    const doc = parseResult(await rpc("tools/call", { name: "doctor", arguments: { cwd } }));
+    if (typeof doc.ok !== "boolean" || !Array.isArray(doc.checks) || doc.checks.length === 0) {
+      return fail(`doctor report malformed: ${JSON.stringify(doc).slice(0, 200)}`);
+    }
+    console.log(`doctor ok=${doc.ok}: ${doc.checks.length} checks`);
 
     /* 9. clean shutdown: kill the plugin-spawned server, verify port freed */
     const sd = parseResult(await rpc("tools/call", {
