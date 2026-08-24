@@ -3,7 +3,7 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.17.0] - 2026-08-24
 
 ### Added
 - **Orphan reaper — no more zombie servers**: every opencode server the plugin spawns is

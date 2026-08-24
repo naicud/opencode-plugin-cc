@@ -1,6 +1,6 @@
 {
   "name": "opencode",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "description": "Use OpenCode from Claude Code to review code or delegate tasks.",
   "author": {
     "name": "naicud"
