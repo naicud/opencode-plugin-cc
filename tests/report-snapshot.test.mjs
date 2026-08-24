@@ -2,12 +2,13 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createTmpDir, cleanupTmpDir } from "./helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(__dirname, "..", "plugins", "opencode", "mcp", "server.mjs");
-const { readReportSnapshot } = await import(SERVER);
+// Windows ESM loader rejects plain absolute paths ("D:\...") — import via URL.
+const { readReportSnapshot } = await import(pathToFileURL(SERVER).href);
 
 describe("report snapshot delivery", () => {
   it("first read returns content; later reads only confirm delivery", () => {
