@@ -32,6 +32,26 @@ describe("report snapshot delivery", () => {
     }
   });
 
+  it("prefers the per-job .oc-reports/<jobId>.md over the legacy root file", () => {
+    const ws = createTmpDir("report-precedence");
+    try {
+      fs.mkdirSync(path.join(ws, ".oc-reports"), { recursive: true });
+      fs.writeFileSync(path.join(ws, ".oc-report.md"), "STATUS: STALE\nlegacy root");
+      const jobFile = path.join(ws, ".oc-reports", "task-7.md");
+      fs.writeFileSync(jobFile, "STATUS: COMPLETED\nper-job wins");
+
+      const snap = readReportSnapshot(ws, "task-7");
+      assert.equal(snap.path, jobFile, "job-specific report must win over root");
+      assert.equal(snap.status, "STATUS: COMPLETED");
+      assert.match(snap.content, /per-job wins/);
+
+      // No per-job file → falls back to the legacy root report.
+      assert.equal(readReportSnapshot(ws, "task-missing").content.includes("legacy root"), true);
+    } finally {
+      cleanupTmpDir(ws);
+    }
+  });
+
   it("oversized reports are capped and flagged truncated", () => {
     const ws = createTmpDir("report-big");
     try {

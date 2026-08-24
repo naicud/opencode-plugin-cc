@@ -181,8 +181,11 @@ fresh files are never touched (spawn-race safe), `/` and the home directory are 
 Knobs: `OPENCODE_STATE_TTL_DAYS`, `OPENCODE_REPORT_TTL_DAYS` (0 disables; doctor previews the
 dry run).
 
-When a delegated session reaches idle cleanly, `wait` also embeds the agent's `.oc-report.md`
-content directly in the response (first call only, capped at 8k chars) — no extra Read needed.
+When a delegated session reaches idle cleanly, `wait` also embeds the agent's report content
+directly in the response (first call only, capped at 8k chars) — no extra Read needed. Reports
+are per-job files (`<workspace>/.oc-reports/<jobId>.md`) so parallel fan-out tasks sharing a
+workspace never overwrite each other; the legacy root `.oc-report.md` stays supported as a read
+fallback for older sessions, and both locations are reaped by the TTL sweep above.
 
 Tiers (curated in `plugins/opencode/config/models.json`; everything else enters unclassified after `npm run models:sync`):
 

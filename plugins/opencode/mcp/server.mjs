@@ -176,13 +176,22 @@ const MAX_TRACKED_REPORTS = 500;
  * @returns {{ path: string, status: string|null, chars: number, truncated: boolean, content?: string, deliveredBefore?: boolean }|null}
  */
 export function readReportSnapshot(cwd, jobId = null) {
-  const file = path.join(cwd, ".oc-report.md");
-  let raw;
-  try {
-    raw = fs.readFileSync(file, "utf8");
-  } catch {
-    return null;
+  // Preferred: the per-job file (fan-out safe). Fallback: the legacy root
+  // .oc-report.md written by sessions before per-job paths existed.
+  const candidates = [
+    jobId ? path.join(cwd, ".oc-reports", `${jobId}.md`) : null,
+    path.join(cwd, ".oc-report.md"),
+  ].filter(Boolean);
+  let raw = null;
+  let file = candidates[candidates.length - 1];
+  for (const candidate of candidates) {
+    try {
+      raw = fs.readFileSync(candidate, "utf8");
+      file = candidate;
+      break;
+    } catch {}
   }
+  if (raw == null) return null;
   const status = (raw.split("\n", 1)[0] ?? "").trim() || null;
   const alreadyDelivered = jobId != null && reportsDelivered.has(jobId);
   if (jobId != null) {
@@ -331,8 +340,21 @@ async function toolModels(args) {
   };
 }
 
-function renderContract(contract, cwd) {
-  return (contract ?? "").replaceAll("${cwd}", cwd);
+function renderContract(contract, cwd, jobId = null) {
+  // ${reportPath} is per-job so concurrent delegates on the SAME workspace
+  // never race on one shared file (fan-out overwrote sibling reports before).
+  const reportPath = jobId ? `.oc-reports/${jobId}.md` : ".oc-report.md";
+  return (contract ?? "").replaceAll("${cwd}", cwd).replaceAll("${reportPath}", reportPath);
+}
+
+/**
+ * Canonical report location for a job: a dedicated file under .oc-reports/ —
+ * unique per job, so parallel fan-out tasks sharing a workspace cannot
+ * overwrite each other. The legacy root .oc-report.md stays supported as a
+ * read fallback for sessions started before this change.
+ */
+export function reportPathFor(cwd, jobId) {
+  return path.join(cwd, ".oc-reports", `${jobId}.md`);
 }
 
 async function toolDelegate(args) {
@@ -458,7 +480,12 @@ async function toolDelegate(args) {
     sessionID = session.id;
   }
 
-  const promptText = `${renderContract(config.contract, cwd)}\n---\n\n${args.task}`;
+  // The job id exists before the prompt so the contract can pin a per-job
+  // report path (no shared-file races between concurrent delegates).
+  const jobId = generateJobId("delegate");
+  const promptText =
+    `${renderContract(config.contract, cwd, jobId)}\n---\n\n${args.task}\n\n` +
+    `[REPORT] Percorso obbligatorio del report finale per QUESTO job: ${reportPathFor(cwd, jobId)} — scrivilo ESATTAMENTE lì (sovrascrive ogni altra indicazione sul percorso del report).`;
 
   await client.sendPromptAsync(sessionID, promptText, {
     agent,
@@ -467,6 +494,7 @@ async function toolDelegate(args) {
   });
 
   const job = createJobRecord(cwd, "delegate", {
+    id: jobId,
     sessionID,
     model: selection.model.id,
     variant: selection.variant ?? null,
@@ -642,12 +670,21 @@ async function toolFanOut(args, meta) {
       const session = await client.createSession({
         title: `${prefix} ${i + 1}/${n}: ${task.replace(/\s+/g, " ").slice(0, 60)}`,
       });
-      await client.sendPromptAsync(session.id, `${renderContract(config.contract, taskCwd)}\n---\n\n${task}`, {
-        agent,
-        model: selector.model,
-        variant: selection.variant,
-      });
+      // Per-job report path: parallel tasks on one workspace never overwrite
+      // each other's .oc-report (the shared-file bug reported on fan-out).
+      const jobId = generateJobId("task");
+      await client.sendPromptAsync(
+        session.id,
+        `${renderContract(config.contract, taskCwd, jobId)}\n---\n\n${task}\n\n` +
+          `[REPORT] Percorso obbligatorio del report finale per QUESTO job: ${reportPathFor(taskCwd, jobId)} — scrivilo ESATTAMENTE lì (sovrascrive ogni altra indicazione sul percorso del report).`,
+        {
+          agent,
+          model: selector.model,
+          variant: selection.variant,
+        }
+      );
       const job = createJobRecord(taskCwd, "delegate", {
+        id: jobId,
         sessionID: session.id,
         model: selection.model.id,
         variant: selection.variant ?? null,
@@ -949,7 +986,9 @@ async function toolWait(args, meta) {
           try {
             await client.sendPromptAsync(
               args.sessionID,
-              "Non hai prodotto alcun output. Esegui ORA il task assegnato e scrivi .oc-report.md come richiesto."
+              job?.id
+            ? `Non hai prodotto alcun output. Esegui ORA il task assegnato e scrivi il report in ${reportPathFor(jobCwd, job.id)} come richiesto.`
+            : "Non hai prodotto alcun output. Esegui ORA il task assegnato e scrivi .oc-report.md come richiesto."
             );
             markJobBySession(jobCwd, args.sessionID, () => ({
               nudgedCount: (job.nudgedCount ?? 0) + 1,
@@ -977,7 +1016,9 @@ async function toolWait(args, meta) {
         try {
           await client.sendPromptAsync(
             args.sessionID,
-            "Non hai prodotto alcun output. Esegui ORA il task assegnato e scrivi .oc-report.md come richiesto."
+            job?.id
+            ? `Non hai prodotto alcun output. Esegui ORA il task assegnato e scrivi il report in ${reportPathFor(jobCwd, job.id)} come richiesto.`
+            : "Non hai prodotto alcun output. Esegui ORA il task assegnato e scrivi .oc-report.md come richiesto."
           );
           markJobBySession(jobCwd, args.sessionID, () => ({
             nudgedCount: (job.nudgedCount ?? 0) + 1,

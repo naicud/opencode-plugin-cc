@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.18.1] - 2026-08-24
+
+### Fixed
+- **Fan-out report race — real-world finding**: every delegate wrote the same
+  `<workspace>/.oc-report.md`, so parallel `fanOut` tasks on one workspace overwrote each
+  other's reports and `waitAll` returned identical `report.content` for all of them. Reports
+  are now per-job files (`<workspace>/.oc-reports/<jobId>.md`): the contract template gains a
+  `${reportPath}` placeholder, delegate/fanOut prompts pin the exact path for their job, the
+  empty-output nudges repeat it, and `wait`/`waitAll` read the job-specific file first (the
+  legacy root `.oc-report.md` remains a read fallback). The hygiene reaper now also collects
+  stale files under `.oc-reports/` and removes the directory once empty.
+
 ## [1.18.0] - 2026-08-24
 
 ### Added

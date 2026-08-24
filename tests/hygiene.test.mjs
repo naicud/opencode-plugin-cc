@@ -181,6 +181,37 @@ describe("hygiene sweepStateDirs", () => {
       assert.ok(fs.existsSync(path.join(ws, ".oc-report.md")));
     });
 
+    it("reaps per-job reports under .oc-reports/ and drops the empty dir", () => {
+      const ws = path.join(wsRoot, "ws-fanout");
+      fs.mkdirSync(path.join(ws, ".oc-reports"), { recursive: true });
+      const oldReport = path.join(ws, ".oc-reports", "task-old.md");
+      const freshReport = path.join(ws, ".oc-reports", "task-new.md");
+      fs.writeFileSync(oldReport, "STATUS: COMPLETED\nold job");
+      fs.writeFileSync(freshReport, "STATUS: COMPLETED\nnew job");
+      age(oldReport, 30);
+      const dir = makeHashDir("hash-fanout");
+      fs.writeFileSync(
+        path.join(dir, "state.json"),
+        JSON.stringify({
+          jobs: [
+            { id: "task-old", directory: ws, status: "completed" },
+            { id: "task-new", directory: ws, status: "completed" },
+          ],
+        })
+      );
+
+      const res = sweepStateDirs({ baseDir: base, now: new Date(), stateTtlMs: 14 * DAY, reportTtlMs: 7 * DAY });
+      assert.ok(res.removedReports.includes(oldReport));
+      assert.ok(!fs.existsSync(oldReport), "stale per-job report reaped");
+      assert.ok(fs.existsSync(freshReport), "fresh per-job report survives");
+      assert.ok(fs.existsSync(path.join(ws, ".oc-reports")), "non-empty dir kept");
+
+      // Once everything inside is gone the dir itself is removed.
+      fs.rmSync(freshReport);
+      sweepStateDirs({ baseDir: base, now: new Date(), stateTtlMs: 14 * DAY, reportTtlMs: 7 * DAY });
+      assert.ok(!fs.existsSync(path.join(ws, ".oc-reports")), "empty .oc-reports dir removed");
+    });
+
     it("ignores unknown workspaces (only plugin-known paths are swept)", () => {
       const stranger = path.join(wsRoot, "stranger-ws");
       fs.mkdirSync(stranger);

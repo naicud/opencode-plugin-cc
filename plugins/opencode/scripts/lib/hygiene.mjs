@@ -267,21 +267,42 @@ export function sweepStateDirs(opts = {}) {
   if (reportTtl !== null) {
     for (const [wsPath, wsJobs] of workspaceJobs) {
       if (wsJobs.some((j) => j.status === "running")) continue; // never under live work
-      const report = path.join(wsPath, ".oc-report.md");
-      let st;
+      // Legacy root report + per-job reports under .oc-reports/ (fan-out safe).
+      const candidates = [path.join(wsPath, ".oc-report.md")];
+      let jobReports = [];
       try {
-        st = fs.statSync(report);
-      } catch {
-        continue;
+        jobReports = fs.readdirSync(path.join(wsPath, ".oc-reports"));
+      } catch {}
+      for (const f of jobReports) {
+        if (f.endsWith(".md")) candidates.push(path.join(wsPath, ".oc-reports", f));
       }
-      if (!st.isFile()) continue;
-      if (nowTs - st.mtimeMs <= reportTtl) continue;
+      for (const report of candidates) {
+        let st;
+        try {
+          st = fs.statSync(report);
+        } catch {
+          continue;
+        }
+        if (!st.isFile()) continue;
+        if (nowTs - st.mtimeMs <= reportTtl) continue;
+        try {
+          if (!opts.dryRun) fs.rmSync(report, { force: true });
+          result.removedReports.push(report);
+        } catch (err) {
+          result.errors.push(`${report}: ${err?.message ?? String(err)}`);
+        }
+      }
+      // Drop the .oc-reports dir itself once empty (never in dry runs).
+      const reportsDir = path.join(wsPath, ".oc-reports");
       try {
-        if (!opts.dryRun) fs.rmSync(report, { force: true });
-        result.removedReports.push(report);
-      } catch (err) {
-        result.errors.push(`${report}: ${err?.message ?? String(err)}`);
-      }
+        if (
+          !opts.dryRun &&
+          fs.existsSync(reportsDir) &&
+          fs.readdirSync(reportsDir).length === 0
+        ) {
+          fs.rmdirSync(reportsDir);
+        }
+      } catch {}
     }
   }
 
