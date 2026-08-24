@@ -153,7 +153,7 @@ describe("checkBudget", () => {
     const overJobs = [job("completed", NOW.toISOString(), 1.01)];
     const r = checkBudget(config, overJobs, { now: NOW });
     assert.equal(r.code, "BUDGET_DAILY_MAX");
-    assert.equal(checkBudget(config, overJobs).code, "BUDGET_DAILY_MAX");
+    assert.equal(checkBudget(config, overJobs, { now: NOW }).code, "BUDGET_DAILY_MAX");
   });
 
   it("both limits set: job-max checked before daily-max", () => {

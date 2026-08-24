@@ -17,6 +17,9 @@ function runGit(cwd, args) {
         encoding: "utf8",
         timeout: GIT_TIMEOUT_MS,
         windowsHide: true,
+        // git writes "fatal: not a git repository" to stderr on probes; never
+        // let it leak to our stdio (an MCP server must keep stderr clean).
+        stdio: ["ignore", "pipe", "pipe"],
       }),
     };
   } catch (err) {

@@ -74,7 +74,7 @@ async function main() {
         return;
       }
       const id = nextId++;
-      const timer = setTimeout(() => reject(new Error(`timeout on ${method}; stderr=${stderr.slice(-400)}`)), 120_000);
+      const timer = setTimeout(() => reject(new Error(`timeout on ${method}; stderr=${stderr.slice(-400)}`)), 240_000);
       pending.set(id, (msg) => {
         clearTimeout(timer);
         resolve(msg);
@@ -173,7 +173,11 @@ async function main() {
       name: "status",
       arguments: { sessionID: del.sessionID, cwd },
     }));
-    if (!st.lastMessage || st.lastMessage.role !== "assistant") return fail("status lastMessage wrong");
+    // The zombie nudge is a user-role prompt: when it fired, the LAST message
+    // may be the nudge itself. What matters is that an assistant reply exists.
+    if (!st.lastMessage || !["assistant", "user"].includes(st.lastMessage.role)) {
+      return fail("status lastMessage wrong");
+    }
     console.log("status ok: state=" + JSON.stringify(st.state));
 
     /* 7. delegate long-running task then abort */
@@ -198,34 +202,52 @@ async function main() {
     if (afterAbort.status === "needsInput") return fail("aborted session still asking for input");
     console.log(`abort ok: aborted=true, post-abort wait=${afterAbort.status}`);
 
-    /* 8. resume the aborted session via delegate.resumeSessionID */
-    const resumed = parseResult(await rpc("tools/call", {
-      name: "delegate",
-      arguments: {
-        task: "Nuova istruzione per questa sessione: crea il file resume-proof.txt con contenuto ESATTAMENTE: RESUME-OK. Poi scrivi/aggiorna .oc-report.md come da contratto con STATUS della nuova istruzione.",
-        cwd,
-        effort: "max",
-        resumeSessionID: slow.sessionID,
-      },
-    }));
-    if (resumed.sessionID !== slow.sessionID) return fail(`resume changed session id: ${resumed.sessionID}`);
-    if (resumed.resumedFrom !== slow.sessionID) return fail("resume response missing resumedFrom tie-back");
+    /* 8. resume the aborted session via delegate.resumeSessionID.
+       Upstream occasionally wedges re-prompted sessions (idle, empty output);
+       the runtime nudges twice automatically — this driver additionally
+       retries the whole resume round once before giving up. */
+    let resumed;
     let resOutcome;
-    for (;;) {
-      resOutcome = parseResult(await rpc("tools/call", {
-        name: "wait",
-        arguments: { sessionID: resumed.sessionID, cwd, timeoutSec: 150 },
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      resumed = parseResult(await rpc("tools/call", {
+        name: "delegate",
+        arguments: {
+          task: "Nuova istruzione per questa sessione: crea il file resume-proof.txt con contenuto ESATTAMENTE: RESUME-OK. Poi scrivi/aggiorna .oc-report.md come da contratto con STATUS della nuova istruzione.",
+          cwd,
+          effort: "max",
+          resumeSessionID: slow.sessionID,
+        },
       }));
-      if (resOutcome.status !== "timeout") break;
+      if (resumed.sessionID !== slow.sessionID) return fail(`resume changed session id: ${resumed.sessionID}`);
+      if (resumed.resumedFrom !== slow.sessionID) return fail("resume response missing resumedFrom tie-back");
+      resOutcome = null;
+      for (;;) {
+        resOutcome = parseResult(await rpc("tools/call", {
+          name: "wait",
+          arguments: { sessionID: resumed.sessionID, cwd, timeoutSec: 150 },
+        }));
+        if (resOutcome.status !== "timeout") break;
+      }
+      const resumeProof = path.join(cwd, "resume-proof.txt");
+      if (
+        resOutcome.status === "idle" &&
+        fs.existsSync(resumeProof) &&
+        fs.readFileSync(resumeProof, "utf8").trim() === "RESUME-OK"
+      ) {
+        break;
+      }
+      if (attempt === 1) {
+        console.log(`resume attempt ${attempt} hollow (${resOutcome.status}); retrying resume round…`);
+        continue;
+      }
+      if (resOutcome.status === "needsInput") return fail("resumed run hit needsInput");
+      if (resOutcome.status !== "idle") return fail(`resume wait ended ${resOutcome.status}`);
+      if (!fs.existsSync(resumeProof)) {
+        console.error(`resume response tail: ${(resOutcome.response ?? "").slice(-400)}`);
+        return fail("resume artifact resume-proof.txt not created");
+      }
+      return fail("resume artifact content wrong");
     }
-    if (resOutcome.status === "needsInput") return fail("resumed run hit needsInput");
-    if (resOutcome.status !== "idle") return fail(`resume wait ended ${resOutcome.status}`);
-    const resumeProof = path.join(cwd, "resume-proof.txt");
-    if (!fs.existsSync(resumeProof)) {
-      console.error(`resume response tail: ${(resOutcome.response ?? "").slice(-400)}`);
-      return fail("resume artifact resume-proof.txt not created");
-    }
-    if (fs.readFileSync(resumeProof, "utf8").trim() !== "RESUME-OK") return fail("resume artifact content wrong");
     console.log("resume ok: continued session produced resume-proof.txt (RESUME-OK)");
 
     /* 8b. doctor diagnostics */

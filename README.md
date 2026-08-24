@@ -130,6 +130,7 @@ the Apache-2.0 license.
 - `/opencode:delegate` -- Delegates a task through the MCP delegation runtime with `--model <id>`, `--tier N` (0–3), `--effort max|high|off`, `--account <name|auto>`. The subagent `opencode-delegate` runs the delegate/wait/verify loop for you.
 - `/opencode:parallel` -- Fan out MULTIPLE tasks in one shot (`task1 ;; task2 ;; task3`, same flags as delegate): calls `fanOut` then supervises everything with `waitAll`, answers permissions, retries retryable failures, verifies artifacts, reports per-task.
 - `/opencode:cost` -- Delegation spend report: total/today, by model, by account, by day, budget limits and remaining allowance.
+- `/opencode:model` -- Guided model wizard: list the catalog, add/retier/remove models, set reasoning effort (always-max policy enforced with warnings), validate config — all through safe companion commands, no hand-editing.
 
 ## Model Delegation (MCP)
 
@@ -168,6 +169,26 @@ when injection isn't possible. This fixes intermittent report-skips at the serve
 relying on prompt compliance alone.
 
 `muse-spark-1.2-contributor-free` is excluded by design (training-data clause).
+
+### Model wizard
+
+Adding or re-tiering models never requires hand-editing JSON — use `/opencode:model` (guided
+interview) or the companion directly:
+
+```bash
+node plugins/opencode/scripts/opencode-companion.mjs model list     # catalog: tier/id/variants/cost
+node plugins/opencode/scripts/opencode-companion.mjs model add glm-5 --tier 2 --variants max,high \
+  --cost-in 0.6 --cost-out 2.2                                      # add to a tier
+node plugins/opencode/scripts/opencode-companion.mjs model set glm-5 --default       # promote
+node plugins/opencode/scripts/opencode-companion.mjs model effort global --mode max  # reasoning effort
+node plugins/opencode/scripts/opencode-companion.mjs model check    # validate config
+```
+
+Every mutation is validated (`validateModelConfig`) and written atomically; failures exit with a
+structured code (`DUPLICATE_MODEL`, `TIER_INVALID`, `DEFAULT_TIER_EMPTY`, …) instead of corrupting
+the file. Reasoning-effort scopes: `global`, `tier <N>`, `model <id>`; modes `max|high|low|off`
+(max clears per-model overrides; anything below max prints an always-max policy warning in the
+wizard).
 
 ### Cost note
 

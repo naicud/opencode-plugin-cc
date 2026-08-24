@@ -18,9 +18,18 @@ import { createJobRecord, runTrackedJob, getClaudeSessionId } from "./lib/tracke
 import { renderStatus, renderResult, renderReview, renderSetup, renderCost } from "./lib/render.mjs";
 import { buildReviewPrompt, buildTaskPrompt } from "./lib/prompts.mjs";
 import { getDiff, getStatus as getGitStatus } from "./lib/git.mjs";
-import { readJson } from "./lib/fs.mjs";
+import { readJson, writeJson } from "./lib/fs.mjs";
+import {
+  validateModelConfig,
+  listSelectableModels,
+  addModel,
+  setModel,
+  setEffort,
+  describeChanges,
+} from "../mcp/lib/model-config.mjs";
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(import.meta.dirname, "..");
+const MODELS_CONFIG_PATH = path.join(PLUGIN_ROOT, "config", "models.json");
 
 // ------------------------------------------------------------------
 // Subcommand dispatch
@@ -37,6 +46,7 @@ const handlers = {
   "task-resume-candidate": handleTaskResumeCandidate,
   status: handleStatus,
   cost: handleCost,
+  model: handleModel,
   result: handleResult,
   cancel: handleCancel,
 };
@@ -452,6 +462,172 @@ async function handleCost(argv) {
   }
   const snapshot = buildCostSnapshot(state.jobs ?? [], config);
   console.log(renderCost(snapshot));
+}
+
+// ------------------------------------------------------------------
+// Model wizard backend (used by /opencode:model)
+// ------------------------------------------------------------------
+
+function readModelsConfig() {
+  return JSON.parse(fs.readFileSync(MODELS_CONFIG_PATH, "utf8"));
+}
+
+/**
+ * `model list` — selectable catalog with tiers/variants/costs.
+ */
+async function handleModelList() {
+  const config = readModelsConfig();
+  let live = {};
+  try {
+    live = JSON.parse(process.env.OC_LIVE_MODELS || "{}");
+  } catch {
+    // no live overlay in wizard mode
+  }
+  const rows = listSelectableModels(config, live);
+  if (rows.length === 0) {
+    console.log("No models configured.");
+    return;
+  }
+  for (const r of rows) {
+    const flags = [r.isDefault ? "default" : null, r.isExcluded ? "excluded" : null]
+      .filter(Boolean)
+      .join(",");
+    const cost =
+      r.costIn === null && r.costOut === null
+        ? "cost n/a"
+        : `$${r.costIn ?? "?"}/Mtok in · $${r.costOut ?? "??"}/Mtok out`;
+    console.log(
+      `tier ${r.tier ?? "-"}  ${r.id}  variants=[${(r.variants ?? []).join(",")}]  ${cost}${flags ? `  (${flags})` : ""}`
+    );
+  }
+}
+
+function failModelOp(res) {
+  console.error(`ERROR ${res.code}: ${res.reason}`);
+  process.exitCode = 1;
+}
+
+/**
+ * `model add <id> --tier N [--variants max,high] [--default] [--cost-in X] [--cost-out Y]`
+ * `model set <id> [--tier N] [--variants ...] [--default] [--remove]`
+ * `model effort global|tier:N|model:<id> <max|high|low|off>`
+ * `model check` — validate models.json, print problems
+ *
+ * All mutations go through the pure model-config lib and are written back
+ * atomically only when valid; the before/after diff is printed.
+ */
+async function handleModel(argv) {
+  const op = argv[0];
+  if (!op || op === "help") {
+    console.log(
+      [
+        "Usage:",
+        "  model list",
+        "  model add <id> --tier N [--variants max,high] [--default] [--cost-in X] [--cost-out Y]",
+        "  model set <id> [--tier N] [--variants a,b] [--default] [--remove]",
+        "  model effort global|tier:N|model:<id> max|high|low|off",
+        "  model check",
+      ].join("\n")
+    );
+    return;
+  }
+
+  const { options, positional } = parseArgs(argv.slice(1), {
+    valueOptions: ["tier", "variants", "cost-in", "cost-out"],
+    booleanOptions: ["default", "remove"],
+  });
+
+  if (op === "check") {
+    const problems = validateModelConfig(readModelsConfig());
+    if (problems.length === 0) {
+      console.log("config/models.json is valid.");
+    } else {
+      for (const p of problems) console.error(`- ${p}`);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (op === "list") {
+    await handleModelList();
+    return;
+  }
+
+  const before = readModelsConfig();
+  const tierNum = options.tier != null && options.tier !== "" ? Number(options.tier) : undefined;
+  const costIn = options["cost-in"] != null && options["cost-in"] !== "" ? Number(options["cost-in"]) : undefined;
+  const costOut = options["cost-out"] != null && options["cost-out"] !== "" ? Number(options["cost-out"]) : undefined;
+  const cost = costIn !== undefined || costOut !== undefined ? { input: costIn, output: costOut } : undefined;
+
+  let res;
+  if (op === "add") {
+    const id = positional[0];
+    if (!id) {
+      console.error("ERROR: model id required (model add <id> --tier N ...)");
+      process.exitCode = 1;
+      return;
+    }
+    res = addModel(before, {
+      id,
+      tier: tierNum,
+      variants: options.variants
+        ? options.variants.split(",").map((v) => v.trim()).filter(Boolean)
+        : undefined,
+      cost,
+      makeDefault: options.default === true,
+    });
+  } else if (op === "set") {
+    const id = positional[0];
+    if (!id) {
+      console.error("ERROR: model id required (model set <id> ...)");
+      process.exitCode = 1;
+      return;
+    }
+    res = setModel(before, {
+      id,
+      ...(tierNum !== undefined ? { tier: tierNum } : {}),
+      ...(options.variants
+        ? { variants: options.variants.split(",").map((v) => v.trim()).filter(Boolean) }
+        : {}),
+      makeDefault: options.default === true,
+      remove: options.remove === true,
+    });
+  } else if (op === "effort") {
+    const scopeArg = positional[0] ?? "";
+    const mode = positional[1] ?? "";
+    let scope;
+    if (scopeArg === "global") scope = { kind: "global" };
+    else if (scopeArg.startsWith("tier:")) scope = { kind: "tier", tier: Number(scopeArg.slice(5)) };
+    else if (scopeArg.startsWith("model:")) scope = { kind: "model", id: scopeArg.slice(6) };
+    else {
+      console.error("ERROR: scope must be global | tier:<N> | model:<id>");
+      process.exitCode = 1;
+      return;
+    }
+    res = setEffort(before, { scope, mode });
+  } else {
+    console.error(`Unknown model operation: ${op} (use list/add/set/effort/check/help)`);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (!res.ok) {
+    failModelOp(res);
+    return;
+  }
+
+  const problems = validateModelConfig(res.config);
+  if (problems.length > 0) {
+    console.error("ERROR: operation would produce an invalid config:");
+    for (const p of problems) console.error(`- ${p}`);
+    console.error("Nothing written.");
+    process.exitCode = 1;
+    return;
+  }
+
+  writeJson(MODELS_CONFIG_PATH, res.config);
+  console.log(`OK. Changes:`);
+  for (const line of describeChanges(before, res.config)) console.log(`  ${line}`);
 }
 
 async function handleResult(argv) {

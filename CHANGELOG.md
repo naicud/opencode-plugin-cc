@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.10.0] - 2026-08-24
+
+### Added
+- **`/opencode:model` wizard + `model-config` lib**: list the catalog with tiers/variants/costs,
+  add models (`model add <id> --tier N [--variants] [--cost-in/out] [--default]`), re-tier/promote/
+  remove (`model set`), set reasoning effort per global/tier/model (`model effort`), validate
+  (`model check`). Every mutation is schema-validated and written atomically with structured
+  error codes — no hand-editing `config/models.json`.
+
+### Fixed
+- Negative model costs now rejected (`COST_INVALID`) by the config validator.
+- CI time-bombs: two tests used the real clock for UTC day bucketing (budget, secrets-hygiene);
+  both now inject a fixed `{now}`.
+
 ## [1.9.0] - 2026-08-23
 
 ### Added

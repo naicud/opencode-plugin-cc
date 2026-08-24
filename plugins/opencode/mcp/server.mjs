@@ -33,6 +33,9 @@ import { loadState, upsertJob, stateBase, generateJobId } from "../scripts/lib/s
 
 const PROTOCOL_VERSION = "2024-11-05";
 const WAIT_POLL_INTERVAL_MS = 5000;
+// How long an idle session with zero assistant output is given to wake up on
+// its own before the zombie nudge fires (see toolWait).
+const EMPTY_IDLE_GRACE_MS = 30_000;
 const DEFAULT_WAIT_TIMEOUT_SEC = 600;
 // MCP progress notifications: long waits (wait/waitAll/fanOut-race) stream
 // live updates when the caller supplies params._meta.progressToken. Interval
@@ -695,6 +698,7 @@ async function toolWait(args, meta) {
   const emit = buildProgressEmitter(meta, { totalSec: timeoutSec });
   const deadline = Date.now() + timeoutSec * 1000;
   const job = (loadState(cwd).jobs ?? []).find((j) => j.sessionID === args.sessionID);
+  let firstIdleSeen = 0; // zombie detection: when we first saw idle+no-assistant
 
   for (;;) {
     // Pending permissions for this session surface as needsInput (RF-19)
@@ -734,12 +738,63 @@ async function toolWait(args, meta) {
         await new Promise((r) => setTimeout(r, WAIT_POLL_INTERVAL_MS));
         continue;
       }
-      // Race guard (E2E finding): right after prompt_async the session is not
-      // yet marked busy AND has no assistant reply. Treat as still starting.
-      if (!outcome && Date.now() < deadline - WAIT_POLL_INTERVAL_MS) {
-        if (Date.now() >= deadline) return { status: "timeout", sessionID: args.sessionID, state };
+      // Race guard + zombie recovery (E2E finding): right after prompt_async
+      // the session is not yet marked busy AND has no assistant reply. Keep
+      // polling through the start-up grace; if the session sits idle with NO
+      // assistant message at all beyond EMPTY_IDLE_GRACE_MS, upstream has
+      // wedged it (live finding under provider flakiness) — nudge the SAME
+      // persisted session instead of waiting out the whole deadline.
+      const nowTs = Date.now();
+      if (!outcome && nowTs < deadline - WAIT_POLL_INTERVAL_MS) {
+        if (!firstIdleSeen) firstIdleSeen = nowTs;
+        const waitedIdle = nowTs - firstIdleSeen;
+        if (
+          waitedIdle > EMPTY_IDLE_GRACE_MS &&
+          job?.type === "delegate" &&
+          (job.nudgedCount ?? 0) < 2
+        ) {
+          try {
+            await client.sendPromptAsync(
+              args.sessionID,
+              "Non hai prodotto alcun output. Esegui ORA il task assegnato e scrivi .oc-report.md come richiesto."
+            );
+            markJobBySession(cwd, args.sessionID, () => ({
+              nudgedCount: (job.nudgedCount ?? 0) + 1,
+              nudgedAt: new Date().toISOString(),
+            }));
+          } catch {
+            // nudge failed: keep polling; honest timeout if it never wakes
+          }
+        }
         await new Promise((r) => setTimeout(r, WAIT_POLL_INTERVAL_MS));
         continue;
+      }
+      // Empty-idle guard (live finding): the session went idle with an
+      // assistant message that has NO text, NO error and NO cost — upstream
+      // occasionally does this under provider flakiness. Nudge (same budget
+      // as the zombie path) instead of reporting a hollow success.
+      if (
+        outcome &&
+        !outcome.text &&
+        !outcome.info?.error &&
+        job?.type === "delegate" &&
+        (job.nudgedCount ?? 0) < 2 &&
+        Date.now() < deadline - WAIT_POLL_INTERVAL_MS
+      ) {
+        try {
+          await client.sendPromptAsync(
+            args.sessionID,
+            "Non hai prodotto alcun output. Esegui ORA il task assegnato e scrivi .oc-report.md come richiesto."
+          );
+          markJobBySession(cwd, args.sessionID, () => ({
+            nudgedCount: (job.nudgedCount ?? 0) + 1,
+            nudgedAt: new Date().toISOString(),
+          }));
+          await new Promise((r) => setTimeout(r, WAIT_POLL_INTERVAL_MS));
+          continue;
+        } catch {
+          // nudge failed: fall through and report the empty idle honestly
+        }
       }
       if (outcome?.info?.error) {
         const esc = buildEscalation(outcome.info.error, loadConfig(), outcome.info.modelID);

@@ -61,8 +61,9 @@ test("formatHint / formatCostTable never embed credentials", () => {
 });
 
 test("summarizeBudget output contains no secrets", () => {
-  const jobs = [{ id: "j1", type: "delegate", status: "completed", cost: 0.5, createdAt: new Date().toISOString() }];
-  assertNoSecret(summarizeBudget({}, jobs));
+  const NOW = new Date("2026-08-23T12:00:00.000Z");
+  const jobs = [{ id: "j1", type: "delegate", status: "completed", cost: 0.5, createdAt: NOW.toISOString() }];
+  assertNoSecret(summarizeBudget({}, jobs, { now: NOW }));
 });
 
 test("buildEscalation suggestions carry no credentials", () => {
