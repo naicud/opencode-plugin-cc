@@ -11,7 +11,24 @@
 // Emits a JSON decision on stdout when routing fires; stays silent otherwise.
 // NEVER blocks: permissionDecision is always "allow".
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { classifyDelegation } from "../mcp/lib/delegation-router.mjs";
+
+const MODELS_CONFIG =
+  process.env.OPENCODE_MODELS_CONFIG ??
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "config", "models.json");
+
+/** Optional `routing` section of config/models.json; missing file/section → {}. */
+function loadRouting() {
+  try {
+    const config = JSON.parse(readFileSync(MODELS_CONFIG, "utf8"));
+    return config.routing && typeof config.routing === "object" ? config.routing : {};
+  } catch {
+    return {};
+  }
+}
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -35,7 +52,7 @@ try {
 }
 
 if (input && input.tool_name === "Task") {
-  const verdict = classifyDelegation(input.tool_input ?? {});
+  const verdict = classifyDelegation(input.tool_input ?? {}, loadRouting());
   if (verdict.route) {
     const advice =
       `${verdict.reason} This subagent task is a strong candidate for OpenCode delegation: ` +

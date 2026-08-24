@@ -29,3 +29,18 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           find plugins -name '*.mjs' -print0 | xargs -0 -n1 node --check
+
+  windows-smoke:
+    # Real-binary smoke on Windows: boots the MCP server over stdio with the
+    # actual opencode CLI installed, verifies handshake + 11 tools + doctor
+    # (binary discovery + state dir). Unit matrix alone never exercises this.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install opencode CLI
+        run: npm i -g opencode-ai
+      - name: MCP stdio smoke against the real binary
+        run: node plugins/opencode/scripts/windows-smoke.mjs

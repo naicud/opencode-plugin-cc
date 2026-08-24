@@ -2,17 +2,51 @@
 // Pure heuristics over a Claude Code Task-tool input; used by the PreToolUse
 // delegation-router hook to decide whether a subagent request is a strong
 // candidate for OpenCode delegation. Zero dependencies, fully deterministic.
+//
+// Keyword lists, the routing threshold and the long-prompt cutoff are all
+// configurable through the optional `routing` section of config/models.json:
+//   "routing": {
+//     "heavy":   ["build", "test", ...],
+//     "review":  ["review", "audit", ...],
+//     "light":   ["explore", "find", ...],
+//     "threshold": 3,
+//     "longPromptChars": 1200
+//   }
+// User words are MERGED over the defaults; invalid entries are ignored.
 
-const HEAVY = /\b(build|builds|test|tests|testing|lint|typecheck|tsc|compile|bundle|minify|refactor|migrate|migration|benchmark|regression)\b/i;
-const REVIEW = /\b(review|audit|adversarial|verify|qa)\b/i;
-const LIGHT = /\b(explore|find|locate|search|lookup|read|summar(y|ize)|quick|list files)\b/i;
+const DEFAULT_HEAVY = ["build", "builds", "test", "tests", "testing", "lint", "typecheck", "tsc", "compile", "bundle", "minify", "refactor", "migrate", "migration", "benchmark", "regression"];
+const DEFAULT_REVIEW = ["review", "audit", "adversarial", "verify", "qa"];
+const DEFAULT_LIGHT = ["explore", "find", "locate", "search", "lookup", "read", "summary", "summarize", "quick", "list files"];
+
+function escapeRegex(word) {
+  return word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildWordPattern(words) {
+  const clean = [...new Set(words.filter((w) => typeof w === "string" && w.trim()))].map(escapeRegex);
+  if (clean.length === 0) return null;
+  return new RegExp(`\\b(${clean.join("|")})\\b`, "i");
+}
+
+function normalizeRouting(routing = {}) {
+  const r = routing && typeof routing === "object" ? routing : {};
+  return {
+    heavy: buildWordPattern([...DEFAULT_HEAVY, ...(Array.isArray(r.heavy) ? r.heavy : [])]),
+    review: buildWordPattern([...DEFAULT_REVIEW, ...(Array.isArray(r.review) ? r.review : [])]),
+    light: buildWordPattern([...DEFAULT_LIGHT, ...(Array.isArray(r.light) ? r.light : [])]),
+    threshold: Number.isInteger(r.threshold) && r.threshold > 0 ? r.threshold : 3,
+    longPromptChars: Number.isInteger(r.longPromptChars) && r.longPromptChars > 0 ? r.longPromptChars : 1200,
+  };
+}
 
 /**
  * Decide whether a Task-tool invocation should be routed to OpenCode.
  * @param {{description?: string, prompt?: string, subagent_type?: string}} toolInput
+ * @param {object} [routing] - optional config/models.json `routing` section
  * @returns {{route: boolean, score: number, reason: string}}
  */
-export function classifyDelegation(toolInput = {}) {
+export function classifyDelegation(toolInput = {}, routing = {}) {
+  const cfg = normalizeRouting(routing);
   const text = `${toolInput.description ?? ""} ${toolInput.prompt ?? ""}`;
   if (!text.trim()) {
     return { route: false, score: 0, reason: "empty task description" };
@@ -20,18 +54,19 @@ export function classifyDelegation(toolInput = {}) {
 
   let score = 0;
   const signals = [];
-  for (const match of text.matchAll(new RegExp(HEAVY.source, "gi"))) {
-    score += 2;
-    signals.push(match[0].toLowerCase());
+  for (const kind of ["heavy", "review"]) {
+    const weight = kind === "heavy" ? 2 : 2;
+    for (const match of text.matchAll(new RegExp(cfg[kind].source, "gi"))) {
+      score += weight;
+      signals.push(match[0].toLowerCase());
+    }
   }
-  for (const match of text.matchAll(new RegExp(REVIEW.source, "gi"))) {
-    score += 2;
-    signals.push(match[0].toLowerCase());
+  if (cfg.light) {
+    for (const _match of text.matchAll(new RegExp(cfg.light.source, "gi"))) {
+      score -= 1;
+    }
   }
-  for (const match of text.matchAll(new RegExp(LIGHT.source, "gi"))) {
-    score -= 1;
-  }
-  if (text.length > 1200) {
+  if (text.length > cfg.longPromptChars) {
     score += 1;
     signals.push("long-prompt");
   }
@@ -40,7 +75,7 @@ export function classifyDelegation(toolInput = {}) {
     signals.push("generalist-agent");
   }
 
-  const route = score >= 3;
+  const route = score >= cfg.threshold;
   return {
     route,
     score,

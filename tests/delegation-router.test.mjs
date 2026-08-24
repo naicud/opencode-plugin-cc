@@ -3,6 +3,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -103,4 +105,81 @@ test("advice survives protocol-injection attempts in tool_input", () => {
   const reason = out.hookSpecificOutput.permissionDecisionReason;
   assert.match(reason, /mcp__plugin_opencode_oc__delegate/);
   assert.ok(!reason.includes(hostile), "hostile payload leaked into advice");
+});
+
+/* --------------------- config-driven routing keywords -------------------- */
+
+test("routing section adds custom heavy keywords", () => {
+  const v = classifyDelegation(
+    { description: "Deploy the staging cluster" },
+    { heavy: ["deploy", "staging"] }
+  );
+  assert.equal(v.route, true);
+  assert.match(v.reason, /deploy/);
+});
+
+test("routing threshold raises and lowers the bar", () => {
+  const input = { description: "Run lint" }; // single signal = score 2
+  assert.equal(classifyDelegation(input).route, false); // default threshold 3
+  assert.equal(classifyDelegation(input, { threshold: 2 }).route, true);
+  assert.equal(classifyDelegation({ description: "run build and test" }, { threshold: 99 }).route, false);
+});
+
+test("custom light keywords offset heavy ones", () => {
+  const input = { description: "build a quick summary of files" };
+  const withCustomLight = classifyDelegation(input, { light: ["summary"] });
+  const baseline = classifyDelegation(input);
+  assert.ok(withCustomLight.score <= baseline.score);
+});
+
+test("invalid routing entries are ignored, never thrown", () => {
+  const v = classifyDelegation({ description: "run the build and test" }, {
+    heavy: [123, null, "", { obj: true }],
+    review: "not-an-array",
+    threshold: -5,
+    longPromptChars: 0,
+  });
+  assert.equal(v.route, true); // garbage entries fall back to defaults
+});
+
+test("longPromptChars is configurable", () => {
+  const short = { description: "implement feature x", prompt: "y".repeat(200) };
+  assert.equal(classifyDelegation(short).score, classifyDelegation(short, { longPromptChars: 10000 }).score);
+  assert.ok(classifyDelegation(short, { longPromptChars: 50 }).score > classifyDelegation(short).score);
+});
+
+test("hook reads OPENCODE_MODELS_CONFIG override for routing", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "router-cfg-"));
+  const cfgPath = path.join(dir, "models.json");
+  writeFileSync(cfgPath, JSON.stringify({ routing: { heavy: ["deploy"], threshold: 2 } }));
+  try {
+    const res = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({
+        tool_name: "Task",
+        tool_input: { description: "deploy the staging cluster" },
+      }),
+      encoding: "utf8",
+      timeout: 15000,
+      env: { ...process.env, OPENCODE_MODELS_CONFIG: cfgPath },
+    });
+    assert.equal(res.status, 0);
+    const out = JSON.parse(res.stdout);
+    assert.equal(out.hookSpecificOutput.permissionDecision, "allow");
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /deploy/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("hook without override uses default keywords only", () => {
+  const res = spawnSync(process.execPath, [HOOK], {
+    input: JSON.stringify({
+      tool_name: "Task",
+      tool_input: { description: "deploy the staging cluster" }, // not a default keyword
+    }),
+    encoding: "utf8",
+    timeout: 15000,
+  });
+  assert.equal(res.status, 0);
+  assert.equal(res.stdout.trim(), "");
 });

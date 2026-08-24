@@ -201,12 +201,19 @@ Reasoning-effort variants (`high`/`max`) bill reasoning tokens as **output** tok
 npm test            # unit suite (290 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, escalation, job control, clean shutdown, agent injection, race validation, progress streaming, workspace diff + cwd validation, personas + routing
 npm run test:e2e    # full delegation round-trip against a real opencode server (needs auth)
 npm run test:stress # permission ask/deny, concurrency, server kill+restart recovery (needs auth)
+npm run test:supervision
+                    # live stress: parallel reviewer personas, waitFor early-exit over 4 sessions,
+                    # degraded-upstream survival (needs auth)
 npm run test:multiaccount # round-robin rotation across two named credentials, per-account isolation, state persistence (needs auth)
 npm run test:escalation  # doomed-credential run proves wait surfaces retryable errors with next-tier escalation (needs auth)
 npm run models:sync [-- --live]   # refresh config/models.json from the live catalog
 npm run demo        # re-run the live delegation demo and regenerate docs/demo.svg
 npm run bench       # benchmark curated tiers: same micro-task per tier, markdown table (wall time, cost, verdict)
 ```
+
+CI runs the unit matrix on ubuntu + windows (Node 20/22) plus a **windows-smoke** job that
+installs the real opencode CLI and boots the MCP server over stdio on Windows — verifying the
+handshake, all eleven tools, and doctor's binary/state-dir checks on win32.
 
 ### Tier benchmark (real run)
 
@@ -238,6 +245,23 @@ refactor, migrate, review/audit keywords, long prompts, generalist agent types �
 as a strong delegation candidate and inject a ready-made recipe (`delegate {task, tier:1,
 autoRetry:true}` → `wait` → verify → `diff`) into the permission-decision reason. Light tasks
 (explore/find/quick lookups) stay local. The hook never blocks: decisions are always "allow".
+
+The keyword lists and thresholds are **config-driven** — add a `routing` section to
+`config/models.json` (or point `OPENCODE_MODELS_CONFIG` elsewhere):
+
+```json
+"routing": {
+  "heavy": ["deploy", "staging", "benchmark"],
+  "review": ["audit"],
+  "light": ["explore", "find"],
+  "threshold": 3,
+  "longPromptChars": 1200
+}
+```
+
+User keywords merge over the built-in defaults; invalid entries are ignored silently;
+`threshold` is the score a request must reach to route (default `3`; heavy/review signals +2 each,
+long prompt +1, light signals −1, generalist agent type +1).
 
 ### Delegation notifications hook
 

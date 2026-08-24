@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.15.0] - 2026-08-24
+
+### Added
+- **Supervision stress suite** (`npm run test:supervision`): parallel reviewer-persona delegates,
+  `waitAll waitFor` early-exit over 4 sessions, degraded-upstream survival — the v1.13.0 features
+  now have live stress coverage, not just unit tests.
+- **Config-driven routing keywords**: optional `routing` section in `config/models.json`
+  (`heavy`/`review`/`light` arrays, `threshold`, `longPromptChars`) merges over built-in defaults;
+  invalid entries ignored; hook honors `OPENCODE_MODELS_CONFIG` override.
+- **Windows smoke CI job**: installs the real opencode CLI on windows-latest and boots the MCP
+  server over stdio (handshake + eleven tools + doctor binary/state checks).
+
 ## [1.14.0] - 2026-08-24
 
 ### Added
