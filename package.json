@@ -1,6 +1,6 @@
 {
   "name": "@opencode-ai/opencode-plugin-cc",
-  "version": "1.11.1",
+  "version": "1.12.0",
   "private": true,
   "type": "module",
   "description": "Use OpenCode from Claude Code to review code or delegate tasks.",
@@ -12,6 +12,7 @@
   "scripts": {
     "test": "node scripts/test-all.mjs",
     "demo": "node plugins/opencode/scripts/demo-delegate.mjs > /tmp/oc-capture.log && node plugins/opencode/scripts/make-demo-svg.mjs /tmp/oc-capture.log docs/demo.svg",
+    "bench": "node plugins/opencode/scripts/benchmark-tiers.mjs",
     "test:e2e": "node plugins/opencode/scripts/e2e-delegate.mjs",
     "models:sync": "node plugins/opencode/scripts/sync-models.mjs",
     "test:stress": "node plugins/opencode/scripts/stress-delegate.mjs",

@@ -131,6 +131,7 @@ the Apache-2.0 license.
 - `/opencode:parallel` -- Fan out MULTIPLE tasks in one shot (`task1 ;; task2 ;; task3`, same flags as delegate): calls `fanOut` then supervises everything with `waitAll`, answers permissions, retries retryable failures, verifies artifacts, reports per-task.
 - `/opencode:cost` -- Delegation spend report: total/today, by model, by account, by day, budget limits and remaining allowance. `cost --html [path]` also renders a standalone dark dashboard (`opencode-cost.html` by default) with a 14-day spend chart and budget gauge.
 - `/opencode:model` -- Guided model wizard: list the catalog, add/retier/remove models, set reasoning effort (always-max policy enforced with warnings), validate config — all through safe companion commands, no hand-editing.
+- `/opencode:test` -- Smoke-test preset: delegates a build/test run of the current workspace to a fast tier with auto-retry, then verifies the blast radius with `diff` and reports the verdict.
 
 ## Model Delegation (MCP)
 
@@ -204,6 +205,7 @@ npm run test:multiaccount # round-robin rotation across two named credentials, p
 npm run test:escalation  # doomed-credential run proves wait surfaces retryable errors with next-tier escalation (needs auth)
 npm run models:sync [-- --live]   # refresh config/models.json from the live catalog
 npm run demo        # re-run the live delegation demo and regenerate docs/demo.svg
+npm run bench       # benchmark curated tiers: same micro-task per tier, markdown table (wall time, cost, verdict)
 ```
 
 ### Automated catalog sync

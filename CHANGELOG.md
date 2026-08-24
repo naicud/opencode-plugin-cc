@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.12.0] - 2026-08-24
+
+### Added
+- **Tier benchmark**: `npm run bench` delegates the same micro-task to every curated tier
+  sequentially and prints a markdown table (model, variant, wall time, cost, verdict) —
+  data-driven model comparison straight from the live catalog.
+- **`/opencode:test` smoke-test preset**: one command delegates a build/test run of the current
+  workspace (fast tier, always-max effort, auto-retry) and verifies what the agent touched via
+  the `diff` tool before reporting the verdict.
+
 ## [1.11.1] - 2026-08-24
 
 ### Fixed
