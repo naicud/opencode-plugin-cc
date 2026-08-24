@@ -75,7 +75,7 @@ function contextFor(payload) {
   }
   if (payload.status === "timeout") {
     const parts = [
-      "Delegated OpenCode session did not reach idle within the wait timeout. Call wait again; after two consecutive timeouts abort the session.",
+      "Delegated OpenCode session did not reach idle within the wait timeout. The session is STILL RUNNING server-side — nothing was lost. Call wait again and keep chaining until idle; abort ONLY if the user explicitly asks to kill it.",
     ];
     const progress = payload.progress;
     if (progress?.tail) {

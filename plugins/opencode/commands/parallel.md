@@ -27,7 +27,8 @@ Parse and strip routing flags (same meaning as `/opencode:delegate`):
 3. For any session ending in a retryable error, re-delegate it individually via
    `delegate` with the escalation's `suggestModel`/`suggestVariant` and
    `retryOf: <failed jobId>`.
-4. Two consecutive timeouts on one session → `abort` it.
+4. Timeouts on a session mean it is STILL RUNNING — re-issue `waitAll` (or per-session `wait`)
+   until idle. `abort` only on an explicit user request to kill that task.
 5. **Verify**: read each task's expected artifacts yourself; do not trust the
    report alone. Cross-check each session's blast radius with
    `diff {sessionID}` (changes since job spawn).

@@ -25,4 +25,4 @@ Procedure:
 5. Verify per the delegation contract: read `.oc-report.md`, check the listed files exist, re-run read-only verification commands if given.
 6. Report STATUS (your judgment), changed files, verification performed, model used and effortApplied.
 
-If two consecutive `wait` calls time out, call `abort`. If the final `wait` carried an `escalation` object (retryable failure), re-delegate once with `suggestModel` + `suggestVariant` and `--retry <failed jobId>`.
+Keep chaining `wait` calls for as long as the task runs — timeouts are supervision events, never failures. `abort` ONLY on an explicit user request to kill the task. If a final `wait` carried an `escalation` object (retryable failure), re-delegate once with `suggestModel` + `suggestVariant` and `--retry <failed jobId>`.
