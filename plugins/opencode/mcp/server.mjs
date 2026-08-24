@@ -51,6 +51,10 @@ const WAIT_POLL_INTERVAL_MS = 5000;
 // its own before the zombie nudge fires (see toolWait).
 const EMPTY_IDLE_GRACE_MS = 30_000;
 const DEFAULT_WAIT_TIMEOUT_SEC = 600;
+// Auto-slice for `wait` calls that pin neither timeoutSec nor a progressToken:
+// return an activity snapshot every slice so the supervisor sees live movement
+// (override with OPENCODE_WAIT_SLICE_SEC; tests use 1).
+const WAIT_SLICE_SEC = 60;
 // MCP progress notifications: long waits (wait/waitAll/fanOut-race) stream
 // live updates when the caller supplies params._meta.progressToken. Interval
 // override exists for tests/e2e; default keeps stdout quiet.
@@ -786,11 +790,27 @@ export function findJobRecord(cwd, sessionID) {
   return { job: null, jobCwd: cwd };
 }
 
+/**
+ * Effective wait duration. When the caller pins timeoutSec (or supplies a
+ * progressToken) behavior is unchanged: one long blocking poll. Otherwise the
+ * call auto-slices to WAIT_SLICE_SEC so Claude Code sees a fresh activity
+ * snapshot (assistant tail, reasoning, tool calls) every slice instead of a
+ * mute block that eventually gets backgrounded — classic-subagent feel with
+ * zero manual `logs` calls.
+ */
+export function effectiveWaitTimeoutSec(args = {}, meta = {}) {
+  if (Number.isFinite(args.timeoutSec)) return Math.max(1, args.timeoutSec);
+  if (meta?.progressToken) return DEFAULT_WAIT_TIMEOUT_SEC;
+  const envSlice = Number.parseInt(process.env.OPENCODE_WAIT_SLICE_SEC ?? "", 10);
+  return Number.isFinite(envSlice) && envSlice > 0 ? envSlice : WAIT_SLICE_SEC;
+}
+
 async function toolWait(args, meta) {
   const cwd = resolveCwd(args);
   const account = accountForSession(cwd, args.sessionID);
   const { client, watcher } = await getConnection(cwd, account);
-  const timeoutSec = args.timeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC;
+  const autoSliced = !Number.isFinite(args.timeoutSec) && !meta?.progressToken;
+  const timeoutSec = effectiveWaitTimeoutSec(args, meta);
   const emit = buildProgressEmitter(meta, { totalSec: timeoutSec });
   const deadline = Date.now() + timeoutSec * 1000;
   const found = findJobRecord(cwd, args.sessionID);
@@ -1046,19 +1066,24 @@ async function toolWait(args, meta) {
       // text plus todos so the supervisor sees movement without extra calls.
       const progress = await fetchAssistantOutcome(client, args.sessionID).catch(() => null);
       activitySink.note(jobCwd, args.sessionID, "wait", `timeout after ${timeoutSec}s — still busy`);
+      const snapshot = {
+        tail: progress?.text?.slice(-300) ?? "",
+        reasoningTail: (watcher.reasoningText?.(args.sessionID) ?? "").slice(-300),
+        tools: activitySink.recentTools(args.sessionID),
+        todos: await summarizeTodos(client, args.sessionID),
+      };
       return {
         status: "timeout",
         sessionID: args.sessionID,
         jobId: job?.id ?? null,
         account,
         state,
-        ...(progress?.text || activitySink.summary(args.sessionID)
+        progress: snapshot,
+        ...(autoSliced
           ? {
-              progress: {
-                tail: progress?.text?.slice(-300) ?? "",
-                reasoningTail: (watcher.reasoningText?.(args.sessionID) ?? "").slice(-300),
-                todos: await summarizeTodos(client, args.sessionID),
-              },
+              sliced: true,
+              nextStep:
+                "still running — call wait {sessionID} again for the next activity slice (assistant output, reasoning and tool calls stream in each progress payload)",
             }
           : {}),
       };
@@ -1651,7 +1676,7 @@ const TOOLS = [
     name: "wait",
     title: "Wait for session",
     description:
-      "Poll a delegated session until it goes idle, needs input (pending permission), or the timeout expires.",
+      "Poll a delegated session until it goes idle, needs input, or the timeout expires. WITHOUT an explicit timeoutSec the call auto-slices (60s): each slice returns a fresh activity snapshot (assistant tail, reasoning, tool calls) plus nextStep — call wait again until idle for a live subagent-style feed.",
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
@@ -1659,7 +1684,7 @@ const TOOLS = [
       properties: {
         sessionID: { type: "string" },
         cwd: { type: "string", description: "Workspace directory" },
-        timeoutSec: { type: "number", description: "Default 600" },
+        timeoutSec: { type: "number", description: "Default 600 when a progressToken is supplied; otherwise auto-slices every 60s" },
       },
     },
   },

@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+- **Automatic live feed from `wait` (classic-subagent feel)**: calls that pin neither
+  `timeoutSec` nor a `progressToken` now auto-slice every 60s (`OPENCODE_WAIT_SLICE_SEC`
+  override) instead of blocking mutely for up to 600s. Every slice returns a rich activity
+  snapshot — assistant tail, reasoning tail, recent tool-call lines, todos — plus a `nextStep`
+  to call again: the delegated agent's progress becomes visible by itself, no manual `logs`.
+  Explicit `timeoutSec` / progressToken callers keep the old long-blocking behavior.
+
 ## [1.16.0] - 2026-08-24
 
 ### Added

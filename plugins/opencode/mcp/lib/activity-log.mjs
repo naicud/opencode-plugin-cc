@@ -306,5 +306,16 @@ export function createActivitySink() {
       .join(" · ");
   }
 
-  return { handleEvent, note, tail, summary, flush };
+  /**
+   * Recent tool-call lines for a session (newest last), for progress payloads.
+   * @returns {string[]}
+   */
+  function recentTools(sessionID, n = 5) {
+    const arr = buffers.get(sessionID);
+    if (!arr || arr.length === 0) return [];
+    const tools = arr.filter((l) => l.includes("[tool]"));
+    return tools.slice(-Math.max(1, Math.min(n, 12))).map((l) => l.replace(/^\[[\d:.]+\] /, ""));
+  }
+
+  return { handleEvent, note, tail, summary, recentTools, flush };
 }

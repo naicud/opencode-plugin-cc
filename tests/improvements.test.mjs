@@ -153,3 +153,15 @@ describe("activity buffer persistence across restarts", () => {
     assert.match(lines[0], /\[delegate\] line survives restarts$/);
   });
 });
+
+describe("wait auto-slice", () => {
+  it("slices to 60s when no timeoutSec/progressToken, 600s with token", async () => {
+    const { effectiveWaitTimeoutSec } = await import("../plugins/opencode/mcp/server.mjs");
+    assert.equal(effectiveWaitTimeoutSec({}, {}), 60);
+    assert.equal(effectiveWaitTimeoutSec({ timeoutSec: 300 }, {}), 300);
+    assert.equal(effectiveWaitTimeoutSec({}, { progressToken: "t" }), 600);
+    process.env.OPENCODE_WAIT_SLICE_SEC = "1";
+    assert.equal(effectiveWaitTimeoutSec({}, {}), 1);
+    delete process.env.OPENCODE_WAIT_SLICE_SEC;
+  });
+});
