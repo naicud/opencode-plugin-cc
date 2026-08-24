@@ -15,7 +15,7 @@ import { resolveWorkspace } from "./lib/workspace.mjs";
 import { loadState, updateState, upsertJob, generateJobId, jobDataPath } from "./lib/state.mjs";
 import { buildStatusSnapshot, resolveResultJob, resolveCancelableJob, enrichJob, buildCostSnapshot } from "./lib/job-control.mjs";
 import { createJobRecord, runTrackedJob, getClaudeSessionId } from "./lib/tracked-jobs.mjs";
-import { renderStatus, renderResult, renderReview, renderSetup, renderCost } from "./lib/render.mjs";
+import { renderStatus, renderResult, renderReview, renderSetup, renderCost, renderCostHtml } from "./lib/render.mjs";
 import { buildReviewPrompt, buildTaskPrompt } from "./lib/prompts.mjs";
 import { getDiff, getStatus as getGitStatus } from "./lib/git.mjs";
 import { readJson, writeJson } from "./lib/fs.mjs";
@@ -461,6 +461,21 @@ async function handleCost(argv) {
     // budget limits simply render as unset
   }
   const snapshot = buildCostSnapshot(state.jobs ?? [], config);
+
+  const htmlIdx = argv.indexOf("--html");
+  if (htmlIdx !== -1) {
+    const outArg = argv[htmlIdx + 1];
+    const outPath =
+      outArg && !outArg.startsWith("-")
+        ? path.resolve(outArg)
+        : path.join(workspace, "opencode-cost.html");
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, renderCostHtml(snapshot));
+    console.log(`Cost dashboard written: ${outPath}`);
+    console.log(renderCost(snapshot));
+    return;
+  }
+
   console.log(renderCost(snapshot));
 }
 

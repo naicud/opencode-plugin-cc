@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.11.0] - 2026-08-24
+
+### Added
+- **HTML cost dashboard**: `opencode cost --html [path]` (or `/opencode:cost`) renders a standalone
+  dark dashboard — totals, daily-budget gauge, 14-day spend chart, per-model/per-account bars.
+- Docs-consistency audit fixes: tool counts, hook counts and command lists aligned across README,
+  `parallel.md`, skill and agent docs.
+
 ## [1.10.0] - 2026-08-24
 
 ### Added

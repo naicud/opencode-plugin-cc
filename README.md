@@ -53,7 +53,7 @@ Then reload the plugin:
 You should see:
 
 ```
-Reloaded: 1 plugin · 4 skills · 2 agents · 3 hooks ...
+Reloaded: 1 plugin · 4 skills · 2 agents · 4 hooks ...
 ```
 
 Finally, verify your setup:
@@ -98,7 +98,7 @@ the Apache-2.0 license.
 
 | Capability | codex-plugin-cc | opencode-plugin-cc |
 |---|---|---|
-| Delegation runtime | companion-script review flow | **7-tool MCP server** (`models`, `delegate`, `wait`, `waitAll`, `status`, `respond`, `abort`), JSON-RPC stdio, zero npm deps |
+| Delegation runtime | companion-script review flow | **11-tool MCP server** (`models`, `delegate`, `fanOut`, `wait`, `waitAll`, `status`, `diff`, `respond`, `abort`, `shutdown`, `doctor`), JSON-RPC stdio, zero npm deps |
 | Model selection | n/a | tiered catalog (4 curated models), client-side variant resolution with strict max-effort chains (no silent downgrade) |
 | Cost visibility | n/a | real USD/Mtok costs per tier + `costTable`, live merge with `/config/providers` |
 | Quota scaling | single account | **multi-account routing**: `OPENCODE_DELEGATE_KEY_<ACCOUNT>` env keys → per-account server spawn via `OPENCODE_AUTH_CONTENT`, fixed / round-robin LRU strategies, distinct ports per workspace+account |
@@ -129,7 +129,7 @@ the Apache-2.0 license.
 - `/opencode:setup` -- Checks OpenCode install/auth, can enable/disable the review gate hook.
 - `/opencode:delegate` -- Delegates a task through the MCP delegation runtime with `--model <id>`, `--tier N` (0–3), `--effort max|high|off`, `--account <name|auto>`. The subagent `opencode-delegate` runs the delegate/wait/verify loop for you.
 - `/opencode:parallel` -- Fan out MULTIPLE tasks in one shot (`task1 ;; task2 ;; task3`, same flags as delegate): calls `fanOut` then supervises everything with `waitAll`, answers permissions, retries retryable failures, verifies artifacts, reports per-task.
-- `/opencode:cost` -- Delegation spend report: total/today, by model, by account, by day, budget limits and remaining allowance.
+- `/opencode:cost` -- Delegation spend report: total/today, by model, by account, by day, budget limits and remaining allowance. `cost --html [path]` also renders a standalone dark dashboard (`opencode-cost.html` by default) with a 14-day spend chart and budget gauge.
 - `/opencode:model` -- Guided model wizard: list the catalog, add/retier/remove models, set reasoning effort (always-max policy enforced with warnings), validate config — all through safe companion commands, no hand-editing.
 
 ## Model Delegation (MCP)
@@ -321,7 +321,7 @@ The server is automatically started and managed per workspace (and per account) 
 
 ```mermaid
 flowchart LR
-    CC["Claude Code"] -->|"MCP stdio<br/>JSON-RPC 2.0"| SRV["mcp/server.mjs<br/>7 tools, zero deps"]
+    CC["Claude Code"] -->|"MCP stdio<br/>JSON-RPC 2.0"| SRV["mcp/server.mjs<br/>11 tools, zero deps"]
     SRV --> ES["ensureServer()<br/>port = 4100 + sha256(cwd+account) % 400"]
     ES -->|spawn detached<br/>OPENCODE_PERMISSION / _CONFIG / _AUTH_CONTENT| OC["opencode serve<br/>127.0.0.1:PORT"]
     SRV -->|"POST /session (prompt_async)"| OC
@@ -388,14 +388,17 @@ opencode-plugin-cc/
 │   ├── config/models.json                # Curated model catalog + permissions + contract
 │   ├── agents/opencode-rescue.md         # Rescue subagent definition
 │   ├── agents/opencode-delegate.md       # Delegation supervisor subagent
-│   ├── commands/                         # 8 slash commands
+│   ├── commands/                         # 11 slash commands
 │   │   ├── review.md
 │   │   ├── adversarial-review.md
 │   │   ├── rescue.md
 │   │   ├── delegate.md
+│   │   ├── parallel.md
 │   │   ├── status.md
 │   │   ├── result.md
 │   │   ├── cancel.md
+│   │   ├── cost.md
+│   │   ├── model.md
 │   │   └── setup.md
 │   ├── hooks/hooks.json                  # Lifecycle hooks
 │   ├── mcp/                              # Delegation MCP server (zero deps)

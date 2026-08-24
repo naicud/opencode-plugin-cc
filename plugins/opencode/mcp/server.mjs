@@ -690,6 +690,36 @@ async function summarizeTodos(client, sessionId) {
   }
 }
 
+/**
+ * Find a delegate job for a sessionID, first in the given workspace then
+ * across every workspace state dir (fanOut tasks may live in per-task
+ * workspaces while wait/waitAll are called with the primary cwd).
+ * @returns {{ job: object|null, jobCwd: string }}
+ */
+export function findJobRecord(cwd, sessionID) {
+  const direct = (loadState(cwd).jobs ?? []).find((j) => j.sessionID === sessionID);
+  if (direct) return { job: direct, jobCwd: cwd };
+  const base = stateBase();
+  let hashes = [];
+  try {
+    hashes = fs.readdirSync(base);
+  } catch {
+    return { job: null, jobCwd: cwd };
+  }
+  for (const h of hashes) {
+    const file = path.join(base, h, "state.json");
+    let jobs;
+    try {
+      jobs = JSON.parse(fs.readFileSync(file, "utf8")).jobs ?? [];
+    } catch {
+      continue;
+    }
+    const hit = jobs.find((j) => j.sessionID === sessionID && typeof j.directory === "string");
+    if (hit) return { job: hit, jobCwd: hit.directory };
+  }
+  return { job: null, jobCwd: cwd };
+}
+
 async function toolWait(args, meta) {
   const cwd = resolveCwd(args);
   const account = accountForSession(cwd, args.sessionID);
@@ -697,7 +727,9 @@ async function toolWait(args, meta) {
   const timeoutSec = args.timeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC;
   const emit = buildProgressEmitter(meta, { totalSec: timeoutSec });
   const deadline = Date.now() + timeoutSec * 1000;
-  const job = (loadState(cwd).jobs ?? []).find((j) => j.sessionID === args.sessionID);
+  const found = findJobRecord(cwd, args.sessionID);
+  const job = found.job;
+  const jobCwd = found.jobCwd; // may differ from cwd for cross-workspace fanOut tasks
   let firstIdleSeen = 0; // zombie detection: when we first saw idle+no-assistant
 
   for (;;) {
@@ -758,7 +790,7 @@ async function toolWait(args, meta) {
               args.sessionID,
               "Non hai prodotto alcun output. Esegui ORA il task assegnato e scrivi .oc-report.md come richiesto."
             );
-            markJobBySession(cwd, args.sessionID, () => ({
+            markJobBySession(jobCwd, args.sessionID, () => ({
               nudgedCount: (job.nudgedCount ?? 0) + 1,
               nudgedAt: new Date().toISOString(),
             }));
@@ -786,7 +818,7 @@ async function toolWait(args, meta) {
             args.sessionID,
             "Non hai prodotto alcun output. Esegui ORA il task assegnato e scrivi .oc-report.md come richiesto."
           );
-          markJobBySession(cwd, args.sessionID, () => ({
+          markJobBySession(jobCwd, args.sessionID, () => ({
             nudgedCount: (job.nudgedCount ?? 0) + 1,
             nudgedAt: new Date().toISOString(),
           }));
@@ -811,7 +843,7 @@ async function toolWait(args, meta) {
               ...(account ? { account } : {}),
               retryOf: job.id,
             });
-            markJobBySession(cwd, args.sessionID, () => ({
+            markJobBySession(jobCwd, args.sessionID, () => ({
               status: "failed",
               errorMessage: outcome.info.error?.data?.message ?? "unknown error",
               completedAt: new Date().toISOString(),
@@ -834,13 +866,13 @@ async function toolWait(args, meta) {
           }
         }
 
-        markJobBySession(cwd, args.sessionID, () => ({
+        markJobBySession(jobCwd, args.sessionID, () => ({
           status: "failed",
           errorMessage: outcome.info.error?.data?.message ?? "unknown error",
           completedAt: new Date().toISOString(),
         }));
       } else {
-        markJobBySession(cwd, args.sessionID, () => ({
+        markJobBySession(jobCwd, args.sessionID, () => ({
           status: "completed",
           completedAt: new Date().toISOString(),
           ...(Number.isFinite(outcome?.info?.cost) ? { cost: outcome.info.cost } : {}),

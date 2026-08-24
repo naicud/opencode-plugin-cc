@@ -13,7 +13,7 @@ process.env.NODE_ENV = "test";
 
 import { setupTestEnv, createTmpDir, cleanupTmpDir } from "./helpers.mjs";
 import { snapshotGitHead, diffSinceSnapshot } from "../plugins/opencode/mcp/lib/workspace-diff.mjs";
-import { handleRpcMessage } from "../plugins/opencode/mcp/server.mjs";
+import { findJobRecord, handleRpcMessage } from "../plugins/opencode/mcp/server.mjs";
 import { createJobRecord } from "../plugins/opencode/scripts/lib/tracked-jobs.mjs";
 import { upsertJob } from "../plugins/opencode/scripts/lib/state.mjs";
 
@@ -241,4 +241,23 @@ test("fanOut rejects per-task nonexistent cwd", async () => {
   });
   assert.equal(res.result.isError, true);
   assert.match(resultOf(res).error, /does not exist/);
+});
+
+test("findJobRecord falls back to cross-workspace state scan", () => {
+  const primary = path.join(tmpDir, "workspaces", "xw-primary");
+  const other = path.join(tmpDir, "workspaces", "xw-other");
+  fs.mkdirSync(primary, { recursive: true });
+  fs.mkdirSync(other, { recursive: true });
+  createJobRecord(other, "delegate", { sessionID: "ses_xw1", directory: other });
+  // direct hit in owning workspace
+  assert.equal(findJobRecord(other, "ses_xw1").jobCwd, other);
+  // called with PRIMARY cwd -> falls back through stateBase scan to job.directory
+  const found = findJobRecord(primary, "ses_xw1");
+  assert.ok(found.job, "cross-workspace job found");
+  assert.equal(found.jobCwd, other);
+  assert.equal(found.job.sessionID, "ses_xw1");
+  // miss stays null and keeps caller cwd
+  const miss = findJobRecord(primary, "ses_unknown");
+  assert.equal(miss.job, null);
+  assert.equal(miss.jobCwd, primary);
 });
