@@ -1081,13 +1081,9 @@ async function toolWait(args, meta) {
         account,
         state,
         progress: snapshot,
-        ...(autoSliced
-          ? {
-              sliced: true,
-              nextStep:
-                "still running — call wait {sessionID} again for the next activity slice (assistant output, reasoning and tool calls stream in each progress payload)",
-            }
-          : {}),
+        ...(autoSliced ? { sliced: true } : {}),
+        nextStep:
+          "the delegated session is STILL RUNNING server-side — nothing was lost; call wait {sessionID} again to keep supervising (each call streams the live feed / returns the next slice) until it reports idle",
       };
     }
     // Sleep the poll interval, but wake instantly when a session.idle SSE
