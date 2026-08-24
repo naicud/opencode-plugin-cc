@@ -158,8 +158,31 @@ The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over
 - **diff** — workspace-diff auditing: every delegate/fanOut job snapshots the git HEAD (`gitBase`) at spawn; `diff {sessionID}` returns what the agent changed since — tracked diff `--stat`, changed-file list, untracked files from `git status`, clean flag, non-repo note. Supervision sees the blast radius without touching git yourself.
 - **respond** — answers a pending permission (`once` / `always` / `reject`). Auto-approve/auto-reject regexes live in `config/models.json`.
 - **abort** — kills a runaway session and marks the job cancelled.
-- **shutdown** — clean teardown of plugin-spawned servers: gracefully aborts busy sessions, SIGTERM→SIGKILL only the exact recorded pids (identity-checked against `ps`/PowerShell — foreign or recycled pids are refused, never signalled), marks their jobs cancelled. Default scope is the current workspace; `account` narrows it; `all:true` sweeps every workspace; `deleteSessions:true` additionally deletes terminal delegate sessions from OpenCode storage (opt-in GC). Leaves zero orphan processes — no `pkill` needed.
-- **doctor** — environment diagnostics in one call: opencode binary on PATH, node version, legacy + per-account auth env vars, derived-port health, server registry state (stale entries auto-cleaned), state-dir writability. Returns structured checks plus a rendered report.
+- **shutdown** — clean teardown of plugin-spawned servers: gracefully aborts busy sessions, SIGTERM→SIGKILL only the exact recorded pids (identity-checked against `ps`/PowerShell — foreign or recycled pids are refused, never signalled), marks their jobs cancelled. Default scope is the current workspace; `account` narrows it; `all:true` sweeps every workspace; `deleteSessions:true` additionally deletes terminal delegate sessions from OpenCode storage (opt-in GC); `cleanState:true` runs the disk hygiene sweep immediately and returns what it removed. Leaves zero orphan processes — no `pkill` needed.
+- **doctor** — environment diagnostics in one call: opencode binary on PATH, node version, legacy + per-account auth env vars, derived-port health, server registry state (stale entries auto-cleaned), state-dir writability, plus a `hygiene` preview of what the next TTL sweep would clean (dry run — removes nothing). Returns structured checks plus a rendered report.
+
+### Server logs in the MCP tab
+
+The server declares the MCP `logging` capability and streams `notifications/message` frames on
+every lifecycle event — boot, delegate/fanOut start, session idle / needs-input / failure,
+shutdown, hygiene sweeps, tool errors (throttled). Claude Code renders them in the MCP UI; the
+same lines are mirrored to stderr as `[opencode:<level>] …` for `claude --mcp-debug`. Clients
+can raise/lower the floor with the standard `logging/setLevel` request.
+
+### Disk hygiene — the plugin never litters
+
+One TTL-based sweep owns every file the plugin writes. It runs at MCP-server boot, hourly on
+long-lived servers, in the `SessionEnd` hook and on demand (`shutdown { cleanState: true }`),
+covering: stale per-workspace state dirs (>14d, no live tracked server), orphaned job files
+dropped by the 50-jobs prune, crash-leftover `*.tmp.*` files, consumed `.oc-report.md` reports
+(>7d, terminal jobs only, plugin-known workspaces only) and abandoned `oc-e2e-*` / `oc-demo-*`
+/ `oc-bench-*` dev workspaces in the OS temp dir. Safety rails: live pids freeze their dir,
+fresh files are never touched (spawn-race safe), `/` and the home directory are refused.
+Knobs: `OPENCODE_STATE_TTL_DAYS`, `OPENCODE_REPORT_TTL_DAYS` (0 disables; doctor previews the
+dry run).
+
+When a delegated session reaches idle cleanly, `wait` also embeds the agent's `.oc-report.md`
+content directly in the response (first call only, capped at 8k chars) — no extra Read needed.
 
 Tiers (curated in `plugins/opencode/config/models.json`; everything else enters unclassified after `npm run models:sync`):
 
