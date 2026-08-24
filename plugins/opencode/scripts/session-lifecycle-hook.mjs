@@ -43,6 +43,14 @@ async function main() {
         }
       }
     }
+
+    // Disk hygiene: TTL sweep so the plugin never leaves dirt behind after a
+    // session ends (stale state dirs, orphaned job files, consumed
+    // .oc-report.md in plugin-known workspaces). Best effort, silent.
+    try {
+      const { sweepStateDirs } = await import("./lib/hygiene.mjs");
+      sweepStateDirs();
+    } catch {}
   }
 }
 

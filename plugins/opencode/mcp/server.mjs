@@ -33,6 +33,12 @@ import { loadState, upsertJob, stateBase, generateJobId } from "../scripts/lib/s
 import { jobLogPath } from "../scripts/lib/state.mjs";
 import { tailLines } from "../scripts/lib/fs.mjs";
 import { createActivitySink } from "./lib/activity-log.mjs";
+import {
+  emitLog,
+  setLogSink,
+  setLogLevel,
+} from "./lib/mcp-log.mjs";
+import { sweepStateDirs } from "../scripts/lib/hygiene.mjs";
 import { getGitRoot } from "../scripts/lib/git.mjs";
 
 /**
@@ -154,6 +160,62 @@ const connections = new Map();
 // by the logs tool. Exported for tests.
 export const activitySink = createActivitySink();
 
+// Job ids whose .oc-report.md content was already embedded in a wait response.
+// First idle wait delivers the full report; later waits only confirm it was
+// seen — this is what makes the hygiene reaper's deferred deletion safe.
+const reportsDelivered = new Set();
+const REPORT_MAX_CHARS = 8000;
+
+/**
+ * Read the contract report (.oc-report.md) a delegated agent wrote in the
+ * workspace, capped to REPORT_MAX_CHARS. Exported for tests.
+ * @param {string} cwd
+ * @param {string} [jobId]
+ * @returns {{ path: string, status: string|null, chars: number, truncated: boolean, content?: string, deliveredBefore?: boolean }|null}
+ */
+export function readReportSnapshot(cwd, jobId = null) {
+  const file = path.join(cwd, ".oc-report.md");
+  let raw;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+  const status = (raw.split("\n", 1)[0] ?? "").trim() || null;
+  const alreadyDelivered = jobId != null && reportsDelivered.has(jobId);
+  if (jobId != null) reportsDelivered.add(jobId);
+  const base = { path: file, status, chars: raw.length, truncated: raw.length > REPORT_MAX_CHARS };
+  return alreadyDelivered
+    ? { ...base, deliveredBefore: true }
+    : { ...base, content: raw.slice(0, REPORT_MAX_CHARS) };
+}
+
+/**
+ * Boot-time + periodic hygiene sweep wrapper. Fire-and-forget: stdout is
+ * reserved for JSON-RPC, so results surface as MCP log notifications,
+ * stderr lines and doctor checks instead of return values.
+ * @param {{ dryRun?: boolean }} [opts]
+ */
+export async function runHygieneSweep(opts = {}) {
+  const res = sweepStateDirs(opts);
+  const cleaned =
+    res.removedDirs.length +
+    res.removedJobFiles.length +
+    res.removedTmpFiles.length +
+    res.removedReports.length;
+  if (cleaned > 0 || res.errors.length > 0 || opts.dryRun) {
+    emitLog(
+      res.errors.length > 0 ? "warning" : "info",
+      `hygiene sweep: ${res.scanned} workspace dir(s), removed ${res.removedDirs.length} stale dir(s), ${res.removedJobFiles.length} orphan job file(s), ${res.removedTmpFiles.length} tmp leftover(s), ${res.removedReports.length} old .oc-report.md`,
+      {
+        force: true,
+        data: opts.dryRun ? { dryRun: true, ...res } : undefined,
+      }
+    );
+  }
+  return res;
+}
+
 /**
  * Get (or create) a client + permission watcher pair for a workspace/account.
  * Per-account servers coexist on distinct derived ports; each is spawned with
@@ -256,7 +318,6 @@ async function toolModels(args) {
     defaults: config.defaults,
     effortPolicy: config.effortPolicy,
     variantPreference: config.variantPreference,
-    budget: config.budget,
     accounts: listAccounts(config),
     offPeakWindowsUtc: ["01:00-04:00", "06:00-10:00"],
     hint: formatHint(config, catalog.models),
@@ -424,6 +485,10 @@ async function toolDelegate(args) {
     "delegate",
     `job ${job.id} started — model=${selection.model.id}${selection.variant ? ` variant=${selection.variant}` : ""} agent=${agent} persona=${persona}${resumedFrom ? ` resumedFrom=${resumedFrom}` : ""}`
   );
+  emitLog("notice", `delegate started job=${job.id} model=${selection.model.id}${selection.variant ? ` variant=${selection.variant}` : ""} persona=${persona}`, {
+    force: true,
+    data: { jobId: job.id, sessionID, model: selection.model.id, variant: selection.variant ?? null, persona },
+  });
 
   return {
     sessionID,
@@ -617,6 +682,7 @@ async function toolFanOut(args, meta) {
   };
 
   if (mode !== "race") {
+    emitLog("notice", `fanOut ${jobs.length}/${n} task(s) started (batch)`, { force: true });
     return {
       ...batchResult,
       nextStep:
@@ -826,6 +892,7 @@ async function toolWait(args, meta) {
       if (pending.length > 0) {
         const progress = await fetchAssistantOutcome(client, args.sessionID).catch(() => null);
         activitySink.note(jobCwd, args.sessionID, "wait", "needsInput — permission pending");
+        emitLog("notice", `session ${shortId(args.sessionID)} needs input — ${pending.length} permission(s) pending`, { force: true });
         return {
           status: "needsInput",
           sessionID: args.sessionID,
@@ -1043,12 +1110,22 @@ async function toolWait(args, meta) {
             ? "idle with EMPTY output (EmptyOutput)"
             : `idle — cost=${outcome?.info?.cost ?? 0}`
       );
+      if (outcome?.info?.error) {
+        emitLog("warning", `session ${shortId(args.sessionID)} failed — ${outcome.info.error?.data?.message ?? "unknown error"}`, { force: true });
+      } else {
+        emitLog("info", `session ${shortId(args.sessionID)} idle — cost=${outcome?.info?.cost ?? 0}`, { force: true });
+      }
+      const report =
+        !outcome?.info?.error && !emptyIdleFailed && job
+          ? readReportSnapshot(jobCwd, job.id)
+          : null;
       return {
         status: "idle",
         sessionID: args.sessionID,
         jobId: job?.id ?? null,
         account,
         state,
+        ...(report ? { report } : {}),
         error: outcome?.info?.error ?? (emptyIdleFailed ? { name: "EmptyOutput" } : null),
         ...(outcome?.info?.error
           ? { escalation: buildEscalation(outcome.info.error, loadConfig(), outcome.info.modelID) }
@@ -1511,6 +1588,11 @@ async function toolShutdown(args) {
       code: "DELETE_SESSIONS_INVALID",
     });
   }
+  if (args.cleanState != null && typeof args.cleanState !== "boolean") {
+    throw Object.assign(new Error('shutdown: "cleanState" must be a boolean'), {
+      code: "CLEAN_STATE_INVALID",
+    });
+  }
   const cwd = resolveCwd(args);
   const scopeAll = args.all === true;
   const account = args.account ?? null;
@@ -1603,10 +1685,27 @@ async function toolShutdown(args) {
     });
   }
 
+  // 5) opt-in disk hygiene: TTL sweep over stale state dirs, orphaned job
+  // files and consumed .oc-report.md files (plugin-known workspaces only).
+  const hygiene = args.cleanState === true ? await runHygieneSweep() : null;
+
+  emitLog("info", `shutdown done — stopped ${stopped.length}, alreadyDead ${alreadyDead.length}, refused ${refused.length}, failed ${failed.length}${hygiene ? `, hygiene cleaned ${hygiene.removedDirs.length + hygiene.removedJobFiles.length + hygiene.removedReports.length} item(s)` : ""}`, { force: true });
+
   return {
     scope: scopeAll ? "all" : "workspace",
     ...(account ? { account } : {}),
     ...(deleteSessions ? { deletedSessions } : {}),
+    ...(hygiene
+      ? {
+          hygiene: {
+            removedDirs: hygiene.removedDirs.length,
+            removedJobFiles: hygiene.removedJobFiles.length,
+            removedTmpFiles: hygiene.removedTmpFiles.length,
+            removedReports: hygiene.removedReports,
+            errors: hygiene.errors,
+          },
+        }
+      : {}),
     stopped,
     alreadyDead,
     refused,
@@ -1802,6 +1901,7 @@ const TOOLS = [
         account: { type: "string", description: "Only stop servers bound to this account" },
         all: { type: "boolean", description: "Stop plugin-spawned servers across ALL workspaces" },
         deleteSessions: { type: "boolean", description: "Also DELETE terminal delegate sessions from OpenCode storage (destructive, opt-in)" },
+        cleanState: { type: "boolean", description: "Also run the disk hygiene sweep: remove stale state dirs, orphaned job files and consumed .oc-report.md files (TTL-based, opt-in; runs automatically on every server boot)" },
       },
     },
   },
@@ -1879,9 +1979,18 @@ export async function handleRpcMessage(msg) {
     if (!hasId) return null;
     return rpcResult(msg.id, {
       protocolVersion: PROTOCOL_VERSION,
-      capabilities: { tools: {} },
+      // `logging` advertises the notifications/message channel that renders in
+      // Claude Code's MCP tab — without it the client never shows server logs.
+      capabilities: { tools: {}, logging: {} },
       serverInfo: { name: "opencode-delegate", version: "1.0.0" },
     });
+  }
+
+  if (msg.method === "logging/setLevel") {
+    if (!hasId) return null;
+    const active = setLogLevel(msg.params?.level);
+    emitLog("info", `log level set to "${active}"`, { force: true });
+    return rpcResult(msg.id, { level: active });
   }
 
   if (typeof msg.method === "string" && msg.method.startsWith("notifications/")) {
@@ -1897,6 +2006,7 @@ export async function handleRpcMessage(msg) {
     const handler = TOOL_HANDLERS[name];
     if (!handler) {
       if (hasId) {
+        emitLog("warning", `unknown tool "${name}" requested`, { force: true });
         return rpcResult(msg.id, {
           content: [{ type: "text", text: `Unknown tool "${name}"` }],
           isError: true,
@@ -1911,6 +2021,7 @@ export async function handleRpcMessage(msg) {
         isError: false,
       });
     } catch (err) {
+      emitLog("error", `tool ${name} failed — ${err.message}${err.code ? ` (${err.code})` : ""}`, { force: true });
       return rpcResult(msg.id, {
         content: [
           {
@@ -1939,6 +2050,8 @@ export async function handleRpcMessage(msg) {
 
 async function main() {
   setProgressNotifier(writeMessage);
+  setLogSink(writeMessage);
+  emitLog("info", `opencode delegation server started (pid ${process.pid}, node ${process.version})`, { force: true });
   // Orphan sweep: shortly after boot, reap opencode servers orphaned by
   // previous crashed/closed sessions (identity-checked, idle+old only, busy
   // servers and long tasks are never touched). Fire-and-forget — stdout is
@@ -1948,6 +2061,18 @@ async function main() {
       .then(({ reapStaleServers }) => reapStaleServers())
       .catch(() => {});
   }, 3000).unref();
+  // Hygiene sweep: same boot window, TTL-based disk cleanup (stale state dirs,
+  // orphaned job files, consumed .oc-report.md). Repeats hourly so a
+  // long-lived server session never lets dirt accumulate. Fire-and-forget.
+  const HYGIENE_BOOT_DELAY_MS = 4000;
+  const HYGIENE_INTERVAL_MS = 60 * 60 * 1000;
+  const hygieneTimer = setInterval(() => {
+    runHygieneSweep().catch(() => {});
+  }, HYGIENE_INTERVAL_MS);
+  hygieneTimer.unref?.();
+  setTimeout(() => {
+    runHygieneSweep().catch(() => {});
+  }, HYGIENE_BOOT_DELAY_MS).unref();
   const rl = readline.createInterface({ input: process.stdin, terminal: false });
   rl.on("line", (line) => {
     const trimmed = line.trim();

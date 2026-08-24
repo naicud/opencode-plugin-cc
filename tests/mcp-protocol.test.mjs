@@ -35,11 +35,17 @@ function talkToServer(messages) {
         const line = buffer.slice(0, nl).trim();
         buffer = buffer.slice(nl + 1);
         if (!line) continue;
+        let parsed;
         try {
-          responses.push(JSON.parse(line));
+          parsed = JSON.parse(line);
         } catch {
           // ignore non-JSON
+          continue;
         }
+        // This suite tests request/response protocol shape; server-initiated
+        // logging notifications are covered by mcp-logging-stdio.test.mjs.
+        if (typeof parsed.method === "string" && parsed.method.startsWith("notifications/")) continue;
+        responses.push(parsed);
       }
       if (responses.length >= expected) {
         clearTimeout(timer);
@@ -129,9 +135,13 @@ describe("mcp-protocol (stdio)", () => {
       proc.stdout.on("data", (d) => {
         out += d.toString();
         if (out.includes("\n")) {
+          // Skip server-initiated notifications (startup log) — take the first
+          // line that carries a response id.
+          const line = out.split("\n").find((l) => l.includes('"id"'));
+          if (!line) return;
           clearTimeout(timer);
           proc.kill();
-          resolve(JSON.parse(out.split("\n")[0]));
+          resolve(JSON.parse(line));
         }
       });
       proc.stdin.write("this is not json\n");
@@ -166,9 +176,13 @@ describe("mcp-protocol (stdio)", () => {
       proc.stdout.on("data", (d) => {
         out += d.toString();
         if (out.includes("\n")) {
+          // Skip server-initiated notifications (startup log) — take the first
+          // line that carries a response id.
+          const line = out.split("\n").find((l) => l.includes('"id"'));
+          if (!line) return;
           clearTimeout(timer);
           proc.kill();
-          resolve(JSON.parse(out.split("\n")[0]));
+          resolve(JSON.parse(line));
         }
       });
       proc.stdin.write(

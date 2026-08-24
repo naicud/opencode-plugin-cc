@@ -182,6 +182,28 @@ export async function runDiagnostics({ cwd = process.cwd(), config = null, check
     add("state-dir", "pass", root);
   });
 
+  // 8. disk hygiene preview: what the TTL reaper WOULD clean right now
+  // (dry run — nothing is removed by doctor).
+  await guarded("hygiene", async () => {
+    const { sweepStateDirs } = await import("./hygiene.mjs");
+    const p = sweepStateDirs({ dryRun: true });
+    if (p.errors.length > 0) {
+      add("hygiene", "warn", `sweep errors: ${p.errors.slice(0, 3).join("; ")}`);
+      return;
+    }
+    const dirt =
+      p.removedDirs.length + p.removedJobFiles.length + p.removedTmpFiles.length + p.removedReports.length;
+    if (dirt === 0) {
+      add("hygiene", "pass", `clean (${p.scanned} workspace dir(s), ${p.keptDirs} active kept)`);
+    } else {
+      add(
+        "hygiene",
+        "pass",
+        `${dirt} item(s) past TTL will be cleaned on next sweep: ${p.removedDirs.length} state dir(s), ${p.removedJobFiles.length} job file(s), ${p.removedTmpFiles.length} tmp leftover(s), ${p.removedReports.length} .oc-report.md`
+      );
+    }
+  });
+
   return {
     ok: !checks.some((c) => c.status === "fail"),
     platform: process.platform,

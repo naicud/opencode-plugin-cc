@@ -112,7 +112,7 @@ test("clean environment: ok=true, binary skipped, checks ordered", async () => {
   assert.equal(report.node, process.version);
   assert.deepEqual(
     report.checks.map((c) => c.name),
-    ["opencode-binary", "node-version", "auth-legacy", "auth-accounts", "ports", "registry", "orphan-reaper", "state-dir"],
+    ["opencode-binary", "node-version", "auth-legacy", "auth-accounts", "ports", "registry", "orphan-reaper", "state-dir", "hygiene"],
   );
   assert.match(checkOf(report, "ports").detail, /all derived ports free/);
   assert.match(checkOf(report, "registry").detail, /no tracked servers/);
@@ -187,7 +187,7 @@ test("runDiagnostics never throws on bogus cwd (shape intact)", async () => {
   assert.equal(Array.isArray(report.checks), true);
   assert.deepEqual(
     report.checks.map((c) => c.name),
-    ["opencode-binary", "node-version", "auth-legacy", "auth-accounts", "ports", "registry", "orphan-reaper", "state-dir"],
+    ["opencode-binary", "node-version", "auth-legacy", "auth-accounts", "ports", "registry", "orphan-reaper", "state-dir", "hygiene"],
   );
   for (const c of report.checks) {
     assert.equal(typeof c.name, "string");
