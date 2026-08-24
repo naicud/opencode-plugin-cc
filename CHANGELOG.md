@@ -5,6 +5,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Long-horizon safety — no more implicit kills**: the delegate agent and delegation skill
+  instructed "two consecutive timeouts → abort, treat as failed", which executed long-running
+  tasks after ~20 minutes of chained waits. Timeouts are now supervision events only: keep
+  re-issuing `wait`/`waitAll` indefinitely; `abort` fires exclusively on an explicit user request
+  or a terminal non-retryable error. `waitAll` reports which sessions outlived its deadline with
+  the same guidance; README documents the long-horizon contract and crash reattach flow.
+
 ### Changed
 - **Visibility without token burn**: progress frames (the `_meta.progressToken` path Claude Code
   uses automatically) now stream every ~8s (was 15s) with the full one-line feed — reasoning ·

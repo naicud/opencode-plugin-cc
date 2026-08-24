@@ -1343,17 +1343,26 @@ async function toolWaitAll(args, meta) {
   const results = ids.map((sessionID) =>
     collected.get(sessionID) ?? { status: "timeout", sessionID }
   );
+  const summary = {
+    total: results.length,
+    idle: results.filter((r) => r.status === "idle").length,
+    needsInput: results.filter((r) => r.status === "needsInput").length,
+    timeout: results.filter((r) => r.status === "timeout").length,
+    error: results.filter((r) => r.status === "error").length,
+  };
   return {
     sessionIDs: ids,
     ...(waitFor != null ? { waitFor, partial: true } : {}),
     results,
-    summary: {
-      total: results.length,
-      idle: results.filter((r) => r.status === "idle").length,
-      needsInput: results.filter((r) => r.status === "needsInput").length,
-      timeout: results.filter((r) => r.status === "timeout").length,
-      error: results.filter((r) => r.status === "error").length,
-    },
+    summary,
+    // Long-horizon guarantee: a timeout entry means the shared deadline of THIS
+    // waitAll call expired while that session is still executing server-side.
+    // Nothing was cancelled — keep supervising; abort only on explicit request.
+    ...(summary.timeout > 0
+      ? {
+          note: `${summary.timeout} session(s) still running past this call's deadline — nothing was cancelled. Re-issue waitAll (or wait per sessionID) until they report idle; kill only if the user explicitly asks.`,
+        }
+      : {}),
   };
 }
 

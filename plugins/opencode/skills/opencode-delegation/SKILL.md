@@ -45,12 +45,15 @@ The delegation contract (config/models.json) is prepended automatically: it rest
 ## Supervision Loop
 
 - `delegate` → save sessionID/jobId
-- `wait` until idle / needsInput / timeout (600s per call); for parallel fan-outs use
+- `wait` until idle / needsInput (600s per call, auto-chained); for parallel fan-outs use
   `waitAll` with up to 12 sessionIDs (shared deadline, one result + summary each)
+- LONG-HORIZON: a `timeout` result is NOT a failure — the session still executes server-side.
+  Re-issue `wait`/`waitAll` for as long as needed; only the USER may order a kill (`abort`).
 - `logs {sessionID}` tails the job's activity log — streamed reasoning, assistant output,
   permission asks, lifecycle transitions — to see what the agent is doing right now
 - `needsInput`: approve only safe read/test commands (`respond once`); reject git push/commit, rm -rf, sudo, curl-to-shell
-- two consecutive timeouts → `abort`
+- timeouts NEVER trigger `abort` — keep re-waiting; kill only on explicit user request
+- terminal `error` (non-retryable) → report FAILED with the escalation object
 - blast-radius check → `diff {sessionID}` (tracked diff + untracked files since the job's `gitBase` snapshot)
 - done supervising → `shutdown` stops the spawned servers cleanly (sessions aborted gracefully,
   only identity-verified pids killed, jobs marked cancelled; `all: true` sweeps every workspace)

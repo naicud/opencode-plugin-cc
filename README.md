@@ -519,6 +519,15 @@ stateDiagram-v2
 State lives at `$CLAUDE_PLUGIN_DATA/state/<sha256(workspace)[0:16]>/state.json` (jobs pruned to 50,
 rotation state for round-robin accounts).
 
+**Long-horizon tasks (>600s).** A `wait`/`waitAll` timeout is a property of the CALL, never of the
+job: the delegated session keeps executing server-side and nothing is cancelled. Supervision is an
+explicit chain — `wait` → `timeout` + snapshot + `nextStep` → `wait` again — for as long as the
+task needs (the live UI feed streams on every segment at zero token cost). Killing is always a
+deliberate act: `abort` fires only on an explicit user request (or a terminal non-retryable
+error); the agent/skill instructions forbid auto-abort on timeouts. If Claude Code itself is
+restarted mid-task, reattach with `status` (job list) → `wait {sessionID}`; the activity buffer
+and job records survive restarts.
+
 ## Project Structure
 
 ```
