@@ -24,6 +24,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Delegation fires when the user asks for it, not on every task.
 
 ### Changed
+- **Docs: model catalog truth + "Adding models" guide.** README gains a step-by-step section for
+  adding models (live-catalog prerequisite, `model add` flags, verify loop, error table,
+  free-only reality). Agent/skill tier guidance no longer advertises deepseek/kimi fallbacks —
+  tiers 1-3 are empty under the current excluded list and a failed free run must be reported
+  BLOCKED, not escalated to an excluded model.
 - **Agent trigger phrases**: `opencode-delegate` description now says "Use PROACTIVELY when the
   user asks for subagents, delegation, parallel workers, background tasks or fan-out work" plus
   explicit exclusions — this is the field Claude Code matches user wording against.

@@ -10,19 +10,20 @@ Use this skill when handing a task to an OpenCode model through the `delegate` M
 
 ## Tier Selection
 
-| Tier | Model | Use | Cost |
+| Tier | Models | Use | Cost |
 |---|---|---|---|
-| 0 | x-preview-f-free (**default**) | Everyday implementation, tests, features | free |
+| 0 | x-preview-f-free (**default**), ox-alpha-free | Everyday implementation, tests, features | free |
+| 1-3 | empty — all paid models are `excluded` | n/a until billing returns | — |
 
 Free-only mode is ACTIVE: all paid models are in `excluded` (config/models.json) — billing
-exhausted. Only free models are selectable: x-preview-f-free, big-pickle, hy3-free,
-mimo-v2.5-free, nemotron-3-ultra-free, nemotron-3.5-lightning-free. Do not request paid models;
-requests fail with `MODEL_EXCLUDED`.
+exhausted. Only free models are selectable: x-preview-f-free, ox-alpha-free, big-pickle,
+hy3-free, mimo-v2.5-free, nemotron-3-ultra-free, nemotron-3.5-lightning-free. Do not request
+paid models; requests fail with `MODEL_EXCLUDED`.
 
 Rules:
 
 - Effort is ALWAYS `max` (policy mode "max", strict chains — no silent downgrade).
-- When unsure between two tiers, take the LOWER one. Retry at most once and only one tier higher.
+- When unsure between two tiers, take the LOWER one. Retry at most once and only one tier higher — but with tiers 1-3 empty, a failed free run should be reported BLOCKED rather than escalated to an excluded model.
 - Never request excluded models (see `excluded` in config/models.json).
 
 ## Effort

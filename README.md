@@ -99,7 +99,7 @@ the Apache-2.0 license.
 | Capability | codex-plugin-cc | opencode-plugin-cc |
 |---|---|---|
 | Delegation runtime | companion-script review flow | **12-tool MCP server** (`models`, `delegate`, `fanOut`, `wait`, `waitAll`, `status`, `logs`, `diff`, `respond`, `abort`, `shutdown`, `doctor`), JSON-RPC stdio, zero npm deps |
-| Model selection | n/a | tiered catalog (4 curated models), client-side variant resolution with strict max-effort chains (no silent downgrade) |
+| Model selection | n/a | tiered catalog (7 free models curated, tiers 1-3 parked while paid billing is excluded), client-side variant resolution with strict max-effort chains (no silent downgrade) |
 | Cost visibility | n/a | real USD/Mtok costs per tier + `costTable`, live merge with `/config/providers` |
 | Quota scaling | single account | **multi-account routing**: `OPENCODE_DELEGATE_KEY_<ACCOUNT>` env keys → per-account server spawn via `OPENCODE_AUTH_CONTENT`, fixed / round-robin LRU strategies, distinct ports per workspace+account |
 | Permission supervision | none | SSE watcher for `permission.v2.asked`, pending queue surfaced in `wait`, `respond once/always/reject`, auto-approve/auto-reject regexes, hot-reloaded rules |
@@ -198,6 +198,60 @@ structured code (`DUPLICATE_MODEL`, `TIER_INVALID`, `DEFAULT_TIER_EMPTY`, …) i
 the file. Reasoning-effort scopes: `global`, `tier <N>`, `model <id>`; modes `max|high|low|off`
 (max clears per-model overrides; anything below max prints an always-max policy warning in the
 wizard).
+
+### Adding models to the catalog (step by step)
+
+**Prerequisite — the id must exist in the OpenCode Zen live catalog.** The delegate resolver
+merges this file with the provider's `/config/providers`; an id that is not live is kept as
+metadata but flagged unavailable and delegation fails. Check what's live first:
+
+```bash
+npm run models:sync            # refresh metadata from the live catalog; NEW ids enter as tier:null + unclassified:true
+node plugins/opencode/scripts/opencode-companion.mjs model list   # see tiers/costs/unclassified
+```
+
+`models:sync` NEVER loses your curation: tier, variants, cost and default flags of known ids are
+preserved; it only adds new live ids and marks ids that vanished from the live catalog.
+
+**1. Add the model to a tier** (never hand-edit `config/models.json`):
+
+```bash
+# free model → tier 0, zero costs:
+node plugins/opencode/scripts/opencode-companion.mjs model add <id> --tier 0 \
+  --variants max --cost-in 0 --cost-out 0
+
+# paid model → its tier with real USD/Mtok prices:
+node plugins/opencode/scripts/opencode-companion.mjs model add <id> --tier 2 \
+  --variants max,high --cost-in 0.6 --cost-out 2.2
+```
+
+Flags: `--tier N` required · `--variants a,b` reasoning-effort chain (order = preference) ·
+`--cost-in/--cost-out` USD per Mtok · `--default` makes it THE default for its tier.
+
+**2. Verify:**
+
+```bash
+node plugins/opencode/scripts/opencode-companion.mjs model check   # validateModelConfig, must be clean
+node plugins/opencode/scripts/opencode-companion.mjs model list    # row shows your model in its tier
+```
+
+Then prove it end-to-end: `mcp__plugin_opencode_oc__delegate {task:"say READY", model:"<id>"}`
+→ `wait {sessionID}` → expect `modelRef: "opencode/<id>"` and `effortApplied` per policy.
+
+**3. Common failures**
+
+| Error | Meaning | Fix |
+|---|---|---|
+| `MODEL_ID_INVALID` | bad characters in id | `[A-Za-z0-9._-]` only |
+| `TIER_INVALID` | missing/non-integer tier | pass `--tier N` (≥0) |
+| `DUPLICATE_MODEL` | id already present | use `model set <id>` to edit instead |
+| `MODEL_EXCLUDED` at delegate time | id listed in `excluded` | remove from `excluded` (edit config or restore billing) |
+| catalog shows `unavailable` | id not in the live provider catalog | wrong id, or plan removed it — re-run `npm run models:sync` |
+
+**Current reality (free-only mode):** tier 0 = x-preview-f-free (default) + ox-alpha-free;
+big-pickle, hy3-free, mimo-v2.5-free, nemotron-3-ultra-free and nemotron-3.5-lightning-free are
+also selectable free models. Tiers 1-3 are empty — every paid id sits in `excluded` until Zen
+billing returns; delete the entry from `excluded` (and set real costs) to re-enable one.
 
 ### Cost note
 
