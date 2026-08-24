@@ -528,6 +528,13 @@ error); the agent/skill instructions forbid auto-abort on timeouts. If Claude Co
 restarted mid-task, reattach with `status` (job list) → `wait {sessionID}`; the activity buffer
 and job records survive restarts.
 
+**No orphans.** Every spawned opencode server is recorded in a per-workspace registry with its
+pid; stops are identity-checked (`ps` must confirm it really is `opencode serve` — foreign or
+recycled pids are refused). When a Claude session dies without cleanup, the next MCP boot and
+every `doctor` run reap stale leftovers automatically: dead pids are pruned, and servers idle AND
+older than 2h (configurable via `OPENCODE_REAP_STALE_MIN`, 0 disables) are stopped and removed —
+busy sessions and recently-active logs are never touched.
+
 ## Project Structure
 
 ```

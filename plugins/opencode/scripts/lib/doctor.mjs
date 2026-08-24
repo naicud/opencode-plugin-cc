@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { stateRoot, loadState } from "./state.mjs";
-import { derivePort, isServerRunning, readServerRegistry } from "./opencode-server.mjs";
+import { derivePort, isServerRunning, readServerRegistry, reapStaleServers } from "./opencode-server.mjs";
 import { resolveOpencodeCommand } from "./opencode-bin.mjs";
 import { envKeyName } from "../../mcp/lib/accounts.mjs";
 
@@ -151,6 +151,23 @@ export async function runDiagnostics({ cwd = process.cwd(), config = null, check
       add("registry", "warn", `${live.join("; ")}${extra}`);
     } else {
       add("registry", "pass", `registry clean (removed ${removed} stale entries)`);
+    }
+  });
+
+  // 6b. orphan reaper: kill idle opencode servers orphaned by crashed/closed
+  // Claude sessions (identity-checked; busy/young servers are never touched).
+  await guarded("orphan-reaper", async () => {
+    const r = await reapStaleServers();
+    if (r.reaped.length > 0) {
+      add(
+        "orphan-reaper",
+        "pass",
+        `reaped ${r.reaped.length} orphaned server(s): ${r.reaped.map((s) => `pid ${s.pid} port ${s.port}`).join(", ")}`
+      );
+    } else if (r.refused > 0) {
+      add("orphan-reaper", "warn", `${r.refused} stale entr${r.refused === 1 ? "y" : "ies"} refused identity check — inspect manually`);
+    } else {
+      add("orphan-reaper", "pass", `no orphans (${r.scanned} tracked, ${r.removedDead} dead entries removed, ${r.skipped} active/young kept)`);
     }
   });
 

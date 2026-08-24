@@ -1939,6 +1939,15 @@ export async function handleRpcMessage(msg) {
 
 async function main() {
   setProgressNotifier(writeMessage);
+  // Orphan sweep: shortly after boot, reap opencode servers orphaned by
+  // previous crashed/closed sessions (identity-checked, idle+old only, busy
+  // servers and long tasks are never touched). Fire-and-forget — stdout is
+  // reserved for JSON-RPC, so results surface through doctor instead.
+  setTimeout(() => {
+    import("../scripts/lib/opencode-server.mjs")
+      .then(({ reapStaleServers }) => reapStaleServers())
+      .catch(() => {});
+  }, 3000).unref();
   const rl = readline.createInterface({ input: process.stdin, terminal: false });
   rl.on("line", (line) => {
     const trimmed = line.trim();

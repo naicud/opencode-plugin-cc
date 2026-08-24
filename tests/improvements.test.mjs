@@ -1,5 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { createTmpDir, cleanupTmpDir, setupTestEnv } from "./helpers.mjs";
 import { classifyDelegation } from "../plugins/opencode/mcp/lib/delegation-router.mjs";
 import { detectFreeCandidates } from "../plugins/opencode/scripts/sync-models.mjs";
@@ -163,5 +165,44 @@ describe("wait auto-slice", () => {
     process.env.OPENCODE_WAIT_SLICE_SEC = "1";
     assert.equal(effectiveWaitTimeoutSec({}, {}), 1);
     delete process.env.OPENCODE_WAIT_SLICE_SEC;
+  });
+});
+
+describe("orphan reaper", () => {
+  it("removes dead entries, keeps young ones, refuses foreign stale processes", async () => {
+    const { spawn, spawnSync } = await import("node:child_process");
+    const { reapStaleServers, recordServerEntry } = await import("../plugins/opencode/scripts/lib/opencode-server.mjs");
+    const { stateRoot, stateBase } = await import("../plugins/opencode/scripts/lib/state.mjs");
+    const entryPath = (port) => path.join(stateRoot(cwd), "servers", `serve-${port}.json`);
+    const backdate = (port) => {
+      const p = entryPath(port);
+      const e = JSON.parse(fs.readFileSync(p, "utf8"));
+      e.startedAt = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+      fs.writeFileSync(p, JSON.stringify(e));
+    };
+
+    // 1. dead pid -> entry removed
+    const dead = spawnSync(process.execPath, ["-e", ""]);
+    recordServerEntry(cwd, { pid: dead.pid, port: 59901, host: "127.0.0.1", account: null });
+
+    // 2. young alive process -> untouched
+    const young = spawn(process.execPath, ["-e", "setInterval(()=>{},250)"], { detached: true }); young.unref();
+    recordServerEntry(cwd, { pid: young.pid, port: 59902, host: "127.0.0.1", account: null });
+
+    // 3. stale alive FOREIGN process -> identity check refuses the kill
+    const stale = spawn(process.execPath, ["-e", "setInterval(()=>{},250)"], { detached: true }); stale.unref();
+    recordServerEntry(cwd, { pid: stale.pid, port: 59903, host: "127.0.0.1", account: null });
+    backdate(59903);
+
+    try {
+      const r = await reapStaleServers({ baseDir: stateBase() });
+      assert.ok(r.removedDead >= 1, "dead entry removed");
+      assert.ok(r.scanned >= 3);
+      assert.equal(fs.existsSync(entryPath(59902)), true, "young untouched");
+      assert.equal(fs.existsSync(entryPath(59903)), true, "foreign stale refused, not killed");
+      assert.ok(r.reaped.every((x) => x.port !== 59902 && x.port !== 59903));
+    } finally {
+      for (const p of [young.pid, stale.pid]) { try { process.kill(p, 9); } catch {} }
+    }
   });
 });

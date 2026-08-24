@@ -192,6 +192,115 @@ export function removeRegistryEntry(cwd, port) {
   fs.rmSync(registryFileFor(cwd, port), { force: true });
 }
 
+/** Default stale threshold before an idle orphan is reaped: 2 hours. */
+export const REAP_STALE_DEFAULT_MS = 2 * 60 * 60 * 1000;
+
+function reapMaxAgeMs() {
+  const min = Number.parseInt(process.env.OPENCODE_REAP_STALE_MIN ?? "", 10);
+  if (Number.isFinite(min) && min <= 0) return null; // disabled
+  return Number.isFinite(min) ? min * 60_000 : REAP_STALE_DEFAULT_MS;
+}
+
+/**
+ * Scan EVERY workspace registry under the plugin state root and reap orphaned
+ * opencode servers left behind by crashed/closed Claude sessions.
+ *
+ * Safety rules, in order:
+ *   1. dead pid            -> registry entry removed (process already gone)
+ *   2. younger than cutoff -> untouched (could be a long task mid-flight)
+ *   3. serve log touched recently -> untouched (activity heuristic)
+ *   4. reachable AND busy  -> untouched (never kill running work)
+ *   5. otherwise           -> identity-checked stop + entry removal
+ *
+ * Identity checks make step 5 refuse foreign/recycled pids, so the worst case
+ * of a wrong decision is a leftover process, never a killed unrelated one.
+ * @param {{ now?: Date, baseDir?: string }} [opts] - baseDir overrides the
+ *   scanned root (tests pass their sandbox; production walks every workspace)
+ * @returns {Promise<{ scanned: number, reaped: Array<object>, skipped: number, removedDead: number, refused: number }>}
+ */
+export async function reapStaleServers(opts = {}) {
+  const maxAgeMs = reapMaxAgeMs();
+  const result = { scanned: 0, reaped: [], skipped: 0, removedDead: 0, refused: 0 };
+  if (maxAgeMs === null) return result;
+  const now = opts.now instanceof Date ? opts.now : new Date();
+
+  // Registry dirs live at <stateRoot>/<hash>/servers — walk every hash dir.
+  const base = opts.baseDir ?? path.dirname(stateRoot("")); // state root parent = hash dir root
+  let hashes = [];
+  try {
+    hashes = fs.readdirSync(base);
+  } catch {
+    return result;
+  }
+  for (const h of hashes) {
+    const regDir = path.join(base, h, "servers");
+    let files = [];
+    try {
+      files = fs.readdirSync(regDir).filter((f) => /^serve-\d+\.json$/i.test(f));
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      let entry;
+      try {
+        entry = JSON.parse(fs.readFileSync(path.join(regDir, f), "utf8"));
+      } catch {
+        continue;
+      }
+      if (!Number.isInteger(entry?.pid)) continue;
+      result.scanned++;
+      const entryCwd = typeof entry.cwd === "string" ? entry.cwd : path.join(base, h);
+
+      if (!isProcessAlive(entry.pid)) {
+        removeRegistryEntry(entryCwd, entry.port);
+        result.removedDead++;
+        continue;
+      }
+
+      const startedAt = Date.parse(entry.startedAt ?? "");
+      const age = Number.isNaN(startedAt) ? Infinity : now.getTime() - startedAt;
+      if (age < maxAgeMs) {
+        result.skipped++;
+        continue;
+      }
+      // Activity heuristic: a recently written serve log means work happened
+      // (or is happening) recently — leave it alone this pass.
+      try {
+        if (entry.logFile && now.getTime() - fs.statSync(entry.logFile).mtimeMs < maxAgeMs) {
+          result.skipped++;
+          continue;
+        }
+      } catch {}
+
+      // Busy check: reachable servers with any BUSY session are never reaped.
+      // Hard-capped at 2s — an unreachable/hung port must not stall the sweep.
+      try {
+        const client = createClient(`http://${entry.host}:${entry.port}`, { directory: entryCwd });
+        const statuses = await Promise.race([
+          client.getSessionStatus(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("probe timeout")), 2000).unref()),
+        ]);
+        if (statuses && Object.values(statuses).some((s) => s?.type === "busy")) {
+          result.skipped++;
+          continue;
+        }
+      } catch {
+        // unreachable: treat as idle-or-dead; the identity-checked stop below
+        // still refuses anything that is not an opencode serve process.
+      }
+
+      const res = await stopServerEntry(entry);
+      if (res.outcome === "stopped" || res.outcome === "alreadyDead") {
+        removeRegistryEntry(entryCwd, entry.port);
+        result.reaped.push({ pid: entry.pid, port: entry.port, cwd: entryCwd });
+      } else {
+        result.refused++;
+      }
+    }
+  }
+  return result;
+}
+
 /**
  * Read every tracked server entry for a workspace.
  * @param {string} cwd

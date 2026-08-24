@@ -5,6 +5,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Orphan reaper — no more zombie servers**: every opencode server the plugin spawns is
+  registry-tracked (pid+port, identity-checked stops). A new `reapStaleServers()` sweep runs at
+  MCP-server boot and in `doctor` (`orphan-reaper` check): it removes dead entries and kills —
+  only after a `ps`-level identity match — servers orphaned by crashed/closed Claude sessions
+  that are idle AND older than 2h (`OPENCODE_REAP_STALE_MIN` minutes, 0 disables). Busy sessions
+  and long tasks are never touched; wrong identity is refused, never killed.
+
 ### Fixed
 - **Long-horizon safety — no more implicit kills**: the delegate agent and delegation skill
   instructed "two consecutive timeouts → abort, treat as failed", which executed long-running
