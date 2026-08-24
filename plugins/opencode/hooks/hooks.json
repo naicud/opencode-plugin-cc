@@ -45,6 +45,18 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/delegation-router-hook.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

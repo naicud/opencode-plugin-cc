@@ -24,7 +24,7 @@ import { resolveSelection, buildModelSelector } from "./lib/resolve.mjs";
 import { createPermissionWatcher } from "./lib/permissions.mjs";
 import { snapshotGitHead, diffSinceSnapshot } from "./lib/workspace-diff.mjs";
 import { pickAccount, buildAuthContent, envKeyName, listAccounts } from "./lib/accounts.mjs";
-import { buildAgentConfigContent, validateAgentConfigContent, AGENT_NAME } from "./lib/agent.mjs";
+import { buildAgentConfigContent, validateAgentConfigContent, AGENT_NAME, PERSONAS } from "./lib/agent.mjs";
 import { buildEscalation } from "./lib/escalation.mjs";
 import { checkBudget, summarizeBudget } from "./lib/budget.mjs";
 import { runDiagnostics, formatDoctorReport } from "../scripts/lib/doctor.mjs";
@@ -181,8 +181,10 @@ async function getConnection(cwd, account = null) {
  * supervisorAgent so nothing degrades silently).
  * Result cached per connection.
  */
-async function resolveDelegationAgent(conn) {
-  if (conn.delegationAgent) return conn.delegationAgent;
+async function resolveDelegationAgent(conn, agentName = AGENT_NAME) {
+  conn.agentAvailability ??= new Set();
+  if (conn.agentAvailability.has(agentName)) return agentName;
+  if (conn.agentAvailability.has(`!${agentName}`)) return "build";
   let available = false;
   try {
     const agents = await conn.client.listAgents();
@@ -191,13 +193,16 @@ async function resolveDelegationAgent(conn) {
         typeof a === "string" ? a : a?.name
       )
     );
-    available = names.has(AGENT_NAME);
+    available = names.has(agentName);
   } catch {
     available = false;
   }
-  conn.delegationAgent = available ? AGENT_NAME : "build";
-  conn.delegationAgentInjected = available;
-  return conn.delegationAgent;
+  conn.agentAvailability.add(available ? agentName : `!${agentName}`);
+  if (available && agentName === AGENT_NAME) {
+    conn.delegationAgent = agentName;
+    conn.delegationAgentInjected = true;
+  }
+  return available ? agentName : "build";
 }
 
 function getClient(cwd, account = null) {
@@ -293,6 +298,16 @@ async function toolDelegate(args) {
   }
   const autoRetry = args.autoRetry === true;
 
+  // Persona validation happens BEFORE any connection work so invalid args
+  // never spawn a server.
+  const persona = args.persona ?? "builder";
+  if (!Object.keys(PERSONAS).includes(persona)) {
+    throw Object.assign(
+      new Error(`delegate: "persona" must be one of ${Object.keys(PERSONAS).join("|")}`),
+      { code: "PERSONA_INVALID" }
+    );
+  }
+
   const jobsNow = loadState(cwd).jobs ?? [];
 
   // Concurrency cap: protect quotas from runaway fan-outs (waitAll x N).
@@ -326,9 +341,10 @@ async function toolDelegate(args) {
 
   const conn = await getConnection(cwd, account);
   const { client } = conn;
-  // Server-side agent: our injected "oc-delegate" carries the work contract;
+  // Server-side agent: our injected agents carry the work contract;
+  // persona selects builder (oc-delegate) vs reviewer (oc-reviewer);
   // explicit args.agent still wins; stock "build" is the reported compat shim.
-  const agent = args.agent ?? config.defaults?.agent ?? (await resolveDelegationAgent(conn));
+  const agent = args.agent ?? config.defaults?.agent ?? (await resolveDelegationAgent(conn, PERSONAS[persona]));
   const agentInjected = args.agent || config.defaults?.agent ? null : conn.delegationAgentInjected === true;
 
   // resumeSessionID continues an existing persisted session (crash recovery,
@@ -376,6 +392,7 @@ async function toolDelegate(args) {
     gitBase: snapshotGitHead(cwd),
     task: args.task,
     autoRetry,
+    persona,
     ...(resumedFrom ? { resumedFrom } : {}),
     ...(retryTarget
       ? { retryOf: retryTarget.id, retryOfSession: retryTarget.sessionID ?? null }
@@ -393,6 +410,7 @@ async function toolDelegate(args) {
     reason: selection.reason ?? null,
     source: selection.source,
     agent,
+    persona,
     ...(agentInjected === false ? { agentNote: `server does not expose "${AGENT_NAME}" agent; ran under stock "build" (contract still prepended to the prompt)` } : {}),
     ...(resumedFrom ? { resumedFrom } : {}),
     ...(retryTarget ? { retryOf: retryTarget.id } : {}),
@@ -484,6 +502,15 @@ async function toolFanOut(args, meta) {
   // Resolve model+variant ONCE against the catalog; identical effort everywhere.
   const firstAccount =
     config.accounts?.names?.length > 0 ? pickAccount(config, cwd, args.account ?? "auto") : null;
+  // Persona validation happens BEFORE any connection work so invalid args
+  // never spawn a server.
+  const fanPersona = args.persona ?? "builder";
+  if (!Object.keys(PERSONAS).includes(fanPersona)) {
+    throw Object.assign(
+      new Error(`fanOut: "persona" must be one of ${Object.keys(PERSONAS).join("|")}`),
+      { code: "PERSONA_INVALID" }
+    );
+  }
   const catalogModels = (await getCatalog(await getClient(cwd, firstAccount))).models;
   const selection = resolveSelection(
     { modelId: args.model, tier: args.tier, effort: args.effort },
@@ -492,7 +519,7 @@ async function toolFanOut(args, meta) {
   );
   const selector = buildModelSelector(selection.model.provider ?? config.provider, selection.model.id, selection.variant);
   const firstConn = await getConnection(cwd, firstAccount);
-  const agent = args.agent ?? config.defaults?.agent ?? (await resolveDelegationAgent(firstConn));
+  const agent = args.agent ?? config.defaults?.agent ?? (await resolveDelegationAgent(firstConn, PERSONAS[fanPersona]));
   const prefix = (
     typeof args.titlePrefix === "string" && args.titlePrefix.trim()
       ? args.titlePrefix.replace(/\s+/g, " ").trim()
@@ -844,8 +871,15 @@ async function toolWait(args, meta) {
 
         // Auto-retry (one shot per original delegation): re-delegate the same
         // task at the escalation-suggested model/variant.
-        if (esc?.retryable && job?.autoRetry && !job.autoRetriedAs && retryChainDepth(cwd, job) < maxAutoRetries(loadConfig())) {
+        if (esc?.retryable && job?.autoRetry && !job.autoRetriedAs && retryChainDepth(jobCwd, job) < maxAutoRetries(loadConfig())) {
           try {
+            // Mark the original failed BEFORE re-delegating: retryOf only
+            // accepts failed/cancelled targets.
+            markJobBySession(jobCwd, args.sessionID, () => ({
+              status: "failed",
+              errorMessage: outcome.info.error?.data?.message ?? "unknown error",
+              completedAt: new Date().toISOString(),
+            }));
             const retried = await toolDelegate({
               task: job.task ?? args.task ?? undefined,
               cwd,
@@ -853,11 +887,9 @@ async function toolWait(args, meta) {
               effort: esc.suggestVariant ?? "max",
               ...(account ? { account } : {}),
               retryOf: job.id,
+              ...(autoRetry ? { autoRetry: true } : {}),
             });
             markJobBySession(jobCwd, args.sessionID, () => ({
-              status: "failed",
-              errorMessage: outcome.info.error?.data?.message ?? "unknown error",
-              completedAt: new Date().toISOString(),
               autoRetriedAs: retried.jobId,
               autoRetrySession: retried.sessionID,
             }));
@@ -883,22 +915,85 @@ async function toolWait(args, meta) {
           completedAt: new Date().toISOString(),
         }));
       } else {
-        markJobBySession(jobCwd, args.sessionID, () => ({
-          status: "completed",
-          completedAt: new Date().toISOString(),
-          ...(Number.isFinite(outcome?.info?.cost) ? { cost: outcome.info.cost } : {}),
-        }));
+        // Honest-failure gate: a builder session that went idle WITHOUT any
+        // assistant output even after the zombie nudges is not a completion.
+        // Surface it as a retryable EmptyOutput error so the existing
+        // auto-retry/escalation machinery can recover (reviewer sessions are
+        // exempt: their deliverable is .oc-report.md on disk, not chat text).
+        const emptyOutput =
+          job?.type === "delegate" &&
+          (job.persona ?? "builder") !== "reviewer" &&
+          !outcome?.text &&
+          !outcome?.info?.error;
+        if (emptyOutput) {
+          const emptyReason =
+            "EmptyOutput: session went idle without producing any assistant output (nudges exhausted)";
+        if (job?.autoRetry && !job.autoRetriedAs && retryChainDepth(jobCwd, job) < maxAutoRetries(loadConfig())) {
+          try {
+            // Mark the original failed BEFORE re-delegating: retryOf only
+            // accepts failed/cancelled targets.
+            markJobBySession(jobCwd, args.sessionID, () => ({
+              status: "failed",
+              errorMessage: emptyReason,
+              completedAt: new Date().toISOString(),
+            }));
+            const retried = await toolDelegate({
+              task: job.task ?? undefined,
+              cwd,
+              effort: "max",
+              ...(account ? { account } : {}),
+              retryOf: job.id,
+              autoRetry: true,
+            });
+            markJobBySession(jobCwd, args.sessionID, () => ({
+              autoRetriedAs: retried.jobId,
+              autoRetrySession: retried.sessionID,
+            }));
+              return {
+                status: "retried",
+                sessionID: args.sessionID,
+                jobId: job?.id ?? null,
+                retryJobId: retried.jobId,
+                newSessionID: retried.sessionID,
+                modelRef: retried.modelRef,
+                variant: retried.variant,
+                reason: emptyReason,
+                originalError: { name: "EmptyOutput" },
+              };
+            } catch {
+              // fall through to the plain failed marking below
+            }
+          }
+          markJobBySession(jobCwd, args.sessionID, () => ({
+            status: "failed",
+            errorMessage: emptyReason,
+            completedAt: new Date().toISOString(),
+          }));
+        } else {
+          markJobBySession(jobCwd, args.sessionID, () => ({
+            status: "completed",
+            completedAt: new Date().toISOString(),
+            ...(Number.isFinite(outcome?.info?.cost) ? { cost: outcome.info.cost } : {}),
+          }));
+        }
       }
+      const emptyIdleFailed =
+        job?.type === "delegate" &&
+        (job.persona ?? "builder") !== "reviewer" &&
+        !outcome?.text &&
+        !outcome?.info?.error;
       return {
         status: "idle",
         sessionID: args.sessionID,
         jobId: job?.id ?? null,
         account,
         state,
-        error: outcome?.info?.error ?? null,
+        error: outcome?.info?.error ?? (emptyIdleFailed ? { name: "EmptyOutput" } : null),
         ...(outcome?.info?.error
           ? { escalation: buildEscalation(outcome.info.error, loadConfig(), outcome.info.modelID) }
-          : {}),
+          : emptyIdleFailed
+            ? { escalation: { retryable: true, reason: "session produced no output; re-delegate suggested" } }
+            : {}),
         cost: outcome?.info?.cost ?? null,
         tokens: outcome?.info?.tokens ?? null,
         variant: outcome?.info?.variant ?? null,
@@ -1032,17 +1127,76 @@ async function toolWaitAll(args, meta) {
       code: "SESSION_IDS_TOO_MANY",
     });
   }
-  const results = await Promise.all(
-    ids.map((sessionID) =>
-      toolWait({ ...args, sessionID }, meta).catch((err) => ({
-        status: "error",
-        sessionID,
-        error: err?.message ?? String(err),
-      }))
-    )
+  const waitFor = args.waitFor ?? null;
+  if (
+    waitFor != null &&
+    (!Number.isInteger(waitFor) || waitFor < 1 || waitFor > ids.length)
+  ) {
+    throw Object.assign(
+      new Error(`waitFor must be an integer between 1 and ${ids.length} (got ${JSON.stringify(args.waitFor)})`),
+      { code: "WAIT_FOR_INVALID" }
+    );
+  }
+  if (waitFor == null) {
+    const results = await Promise.all(
+      ids.map((sessionID) =>
+        toolWait({ ...args, sessionID }, meta).catch((err) => ({
+          status: "error",
+          sessionID,
+          error: err?.message ?? String(err),
+        }))
+      )
+    );
+    return {
+      sessionIDs: ids,
+      results,
+      summary: {
+        total: results.length,
+        idle: results.filter((r) => r.status === "idle").length,
+        needsInput: results.filter((r) => r.status === "needsInput").length,
+        timeout: results.filter((r) => r.status === "timeout").length,
+        error: results.filter((r) => r.status === "error").length,
+      },
+    };
+  }
+
+  // Early-exit mode: return as soon as `waitFor` sessions reach a terminal
+  // state (idle / needsInput / error). Per-session timeouts are retried in
+  // later slices until the shared deadline is spent.
+  const totalSec = args.timeoutSec ?? DEFAULT_WAIT_TIMEOUT_SEC;
+  const deadline = Date.now() + totalSec * 1000;
+  const collected = new Map();
+  let pending = [...ids];
+  while (pending.length > 0 && collected.size < waitFor && Date.now() < deadline) {
+    const remainingSec = Math.max(1, Math.ceil((deadline - Date.now()) / 1000));
+    const sliceSec = Math.min(10, remainingSec);
+    const settled = await Promise.all(
+      pending.map((sessionID) =>
+        toolWait({ ...args, sessionID, timeoutSec: sliceSec }, meta).catch((err) => ({
+          status: "error",
+          sessionID,
+          error: err?.message ?? String(err),
+        }))
+      )
+    );
+    const stillPending = [];
+    for (const r of settled) {
+      if (r.status === "timeout") {
+        stillPending.push(r.sessionID);
+      } else if (collected.size < waitFor || r.status !== "idle") {
+        collected.set(r.sessionID, r);
+      } else {
+        // already have enough terminal sessions; drop extras
+      }
+    }
+    pending = stillPending;
+  }
+  const results = ids.map((sessionID) =>
+    collected.get(sessionID) ?? { status: "timeout", sessionID }
   );
   return {
     sessionIDs: ids,
+    ...(waitFor != null ? { waitFor, partial: true } : {}),
     results,
     summary: {
       total: results.length,
@@ -1335,6 +1489,7 @@ const TOOLS = [
         effort: { type: "string", enum: ["off", "high", "max"], description: "Effort request; default from effortPolicy" },
         account: { type: "string", description: 'OpenCode account for quota routing ("auto" default round-robin)' },
         agent: { type: "string", description: "OpenCode agent (default build)" },
+        persona: { type: "string", enum: ["builder", "reviewer"], description: "builder (default): oc-delegate agent, may edit files. reviewer: read-only oc-reviewer agent that may only write .oc-report.md" },
         retryOf: { type: "string", description: "Job id or id prefix of a failed/cancelled delegate job this run retries" },
         resumeSessionID: { type: "string", description: "Existing opencode session id to continue (crash recovery / multi-step) instead of creating a new session" },
         title: { type: "string", description: "Optional session title override (default: first 80 chars of task)" },
@@ -1361,6 +1516,7 @@ const TOOLS = [
         effort: { type: "string", enum: ["off", "high", "max"], description: "Effort request; default from effortPolicy" },
         account: { type: "string", description: 'OpenCode account for quota routing ("auto" default round-robin)' },
         agent: { type: "string", description: "OpenCode agent (default oc-delegate when injected, else build)" },
+        persona: { type: "string", enum: ["builder", "reviewer"], description: "Agent persona for every task in the batch (default builder)" },
         titlePrefix: { type: "string", description: "Session title prefix (default Fanout)" },
       },
     },
@@ -1385,7 +1541,7 @@ const TOOLS = [
     name: "waitAll",
     title: "Wait for sessions",
     description:
-      "Wait for MULTIPLE delegated sessions in parallel until each goes idle, needs input, or the shared timeout expires. Returns per-session outcomes plus counts.",
+      "Wait for MULTIPLE delegated sessions in parallel until each goes idle, needs input, or the shared timeout expires. Returns per-session outcomes plus counts. Optional waitFor:N returns early as soon as N sessions reach a terminal state (idle/needsInput/error).",
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
@@ -1394,6 +1550,11 @@ const TOOLS = [
         sessionIDs: { type: "array", items: { type: "string" }, description: "Up to 12 session ids" },
         cwd: { type: "string", description: "Workspace directory" },
         timeoutSec: { type: "number", description: "Default 600 (shared deadline)" },
+        waitFor: {
+          type: "integer",
+          description:
+            "Early exit once N sessions reach a terminal state (idle/needsInput/error); remaining sessions are reported as timeout",
+        },
       },
     },
   },

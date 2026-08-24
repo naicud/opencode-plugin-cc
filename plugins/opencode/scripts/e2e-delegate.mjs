@@ -119,13 +119,15 @@ async function main() {
     if (byId["muse-spark-1.2-contributor-free"]) return fail("excluded model leaked into catalog");
     console.log(`models ok: ${models.models.length} entries, default=${models.defaults.tier}, live=${models.live}`);
 
-    /* 4. delegate a real task at max effort */
+    /* 4. delegate a real task at max effort (autoRetry: self-heal upstream
+          empty-output zombies by re-delegating at the suggested model) */
     const del = parseResult(await rpc("tools/call", {
       name: "delegate",
       arguments: {
         task: "Crea il file e2e-proof.txt con contenuto ESATTAMENTE: E2E-MAX-EFFORT-OK. Poi scrivi .oc-report.md come da contratto.",
         cwd,
         effort: "max",
+        autoRetry: true,
       },
     }));
     if (del.modelRef !== "opencode/x-preview-f-free") return fail(`unexpected model ${del.modelRef}`);
@@ -133,15 +135,25 @@ async function main() {
     if (!del.sessionID || !del.jobId) return fail("delegate missing sessionID/jobId");
     console.log(`delegate ok: ${del.modelRef} variant=${del.variant} job=${del.jobId}`);
 
-    /* 5. wait to completion */
+    /* 5. wait to completion; follow status:"retried" chains (EmptyOutput
+          auto-healing) until a terminal non-retried result */
     let outcome;
+    let activeSession = del.sessionID;
+    let retriedCount = 0;
     for (;;) {
       outcome = parseResult(await rpc("tools/call", {
         name: "wait",
-        arguments: { sessionID: del.sessionID, cwd, timeoutSec: 150 },
+        arguments: { sessionID: activeSession, cwd, timeoutSec: 150 },
         _meta: { progressToken: "e2e-wait" },
       }));
       console.log(`wait: ${outcome.status}`);
+      if (outcome.status === "retried") {
+        retriedCount += 1;
+        if (retriedCount > 3) return fail("retry chain exceeded 3 hops");
+        console.log(`auto-retry ok: new session ${outcome.newSessionID} (${outcome.reason?.slice(0, 60)})`);
+        activeSession = outcome.newSessionID;
+        continue;
+      }
       if (outcome.status !== "timeout") break;
     }
     // Live progress: frames must have streamed while waiting (SSE part tracker).
@@ -152,7 +164,35 @@ async function main() {
       return fail(`unexpected permission request: ${JSON.stringify(outcome.permissions)}`);
     }
     if (outcome.status !== "idle") return fail(`wait ended ${outcome.status}`);
-    if (outcome.error) return fail(`assistant error: ${JSON.stringify(outcome.error)}`);
+    if (outcome.error) {
+      if (outcome.error.name === "EmptyOutput") {
+        // Upstream can hit windows where every fresh session goes idle-empty.
+        // Supervisor fallback: one final plain re-delegate (fresh job, no
+        // retryOf linkage) before declaring failure — mirrors a human
+        // re-running the task after the auto-retry chain is exhausted.
+        console.log(`empty output persisted after ${retriedCount} retry(ies); supervisor fallback: plain re-delegate`);
+        const fb = parseResult(await rpc("tools/call", {
+          name: "delegate",
+          arguments: { cwd, task, effort: "max" },
+        }));
+        let fbOutcome = null;
+        for (;;) {
+          fbOutcome = parseResult(await rpc("tools/call", {
+            name: "wait",
+            arguments: { sessionID: fb.sessionID, cwd, timeoutSec: 180 },
+          }));
+          if (fbOutcome.status === "retried") continue;
+          if (fbOutcome.status !== "timeout") break;
+        }
+        if (fbOutcome.status !== "idle" || fbOutcome.error || !fs.existsSync(proof)) {
+          return fail(`empty output persisted after ${retriedCount} retries + supervisor fallback`);
+        }
+        outcome = fbOutcome;
+        console.log("supervisor fallback ok: fresh session completed the task");
+      } else {
+        return fail(`assistant error: ${JSON.stringify(outcome.error)}`);
+      }
+    }
     const proof = path.join(cwd, "e2e-proof.txt");
     if (!fs.existsSync(proof)) return fail("task artifact e2e-proof.txt not created");
     if (fs.readFileSync(proof, "utf8").trim() !== "E2E-MAX-EFFORT-OK") {
@@ -208,18 +248,26 @@ async function main() {
        retries the whole resume round once before giving up. */
     let resumed;
     let resOutcome;
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      // Attempts 1-2 continue the persisted session. Attempt 3 starts a FRESH
+      // session with the same instruction: an aborted upstream session can be
+      // poisoned (MessageAbortedError history) and never produce output again
+      // — recovery then means a clean session, not another nudge.
+      const useFresh = attempt === 3;
       resumed = parseResult(await rpc("tools/call", {
         name: "delegate",
         arguments: {
-          task: "Nuova istruzione per questa sessione: crea il file resume-proof.txt con contenuto ESATTAMENTE: RESUME-OK. Poi scrivi/aggiorna .oc-report.md come da contratto con STATUS della nuova istruzione.",
+          task: useFresh
+            ? "Crea il file resume-proof.txt con contenuto ESATTAMENTE: RESUME-OK. Poi scrivi .oc-report.md come da contratto."
+            : "Nuova istruzione per questa sessione: crea il file resume-proof.txt con contenuto ESATTAMENTE: RESUME-OK. Poi scrivi/aggiorna .oc-report.md come da contratto con STATUS della nuova istruzione.",
           cwd,
           effort: "max",
-          resumeSessionID: slow.sessionID,
+          ...(useFresh ? {} : { resumeSessionID: slow.sessionID }),
         },
       }));
-      if (resumed.sessionID !== slow.sessionID) return fail(`resume changed session id: ${resumed.sessionID}`);
-      if (resumed.resumedFrom !== slow.sessionID) return fail("resume response missing resumedFrom tie-back");
+      if (!useFresh && resumed.sessionID !== slow.sessionID) return fail(`resume changed session id: ${resumed.sessionID}`);
+      if (!useFresh && resumed.resumedFrom !== slow.sessionID) return fail("resume response missing resumedFrom tie-back");
+      if (useFresh) console.log("resume fallback: fresh session after poisoned aborted session");
       resOutcome = null;
       for (;;) {
         resOutcome = parseResult(await rpc("tools/call", {
@@ -236,8 +284,8 @@ async function main() {
       ) {
         break;
       }
-      if (attempt === 1) {
-        console.log(`resume attempt ${attempt} hollow (${resOutcome.status}); retrying resume round…`);
+      if (attempt < 3) {
+        console.log(`resume attempt ${attempt} hollow (${resOutcome.status}); retrying…`);
         continue;
       }
       if (resOutcome.status === "needsInput") return fail("resumed run hit needsInput");

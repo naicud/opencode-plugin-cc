@@ -138,10 +138,10 @@ the Apache-2.0 license.
 The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over stdio, zero npm deps) exposing **eleven tools**, reachable as `mcp__plugin_opencode_oc__models|delegate|fanOut|wait|waitAll|status|diff|respond|abort|shutdown|doctor`:
 
 - **models** — merged catalog (file + live `/config/providers`) with tiers, variants, real costs (`costTable`: USD per Mtok in/out), effort policy, accounts overview and budget hint.
-- **delegate** — resolves model+variant client-side (the server accepts any variant string and silently falls back to base — see `docs/opencode-api-findings.md` P2), creates a titled session, fires `prompt_async` with the work contract from `config/models.json`, records a job visible to `status`. Extras: `retryOf` links a re-run to a failed/cancelled job, `resumeSessionID` continues an existing persisted session (crash recovery / multi-step), `account` routes quota across pooled accounts, `title` overrides the session name, `autoRetry: true` re-delegates ONCE at the escalation-suggested model+variant if the run dies with a retryable error (returns `status:"retried"` + new sessionID). Enforced guards: `config.concurrency.maxDelegates` cap and `config.budget` spend limits (`DELEGATE_LIMIT_EXCEEDED`, `BUDGET_JOB_MAX`, `BUDGET_DAILY_MAX`).
+- **delegate** — resolves model+variant client-side (the server accepts any variant string and silently falls back to base — see `docs/opencode-api-findings.md` P2), creates a titled session, fires `prompt_async` with the work contract from `config/models.json`, records a job visible to `status`. Extras: `persona` picks the injected server-side agent (`builder` = full write access; `reviewer` = read-only, may only write `.oc-report.md` — its edit attempts surface as pending permissions), `retryOf` links a re-run to a failed/cancelled job, `resumeSessionID` continues an existing persisted session (crash recovery / multi-step), `account` routes quota across pooled accounts, `title` overrides the session name, `autoRetry: true` re-delegates ONCE at the escalation-suggested model+variant if the run dies with a retryable error (returns `status:"retried"` + new sessionID). Enforced guards: `config.concurrency.maxDelegates` cap and `config.budget` spend limits (`DELEGATE_LIMIT_EXCEEDED`, `BUDGET_JOB_MAX`, `BUDGET_DAILY_MAX`).
 - **fanOut** — batch parallelism: delegate up to 12 tasks with ONE call. Same resolved model+variant for every task; round-robin account rotation per task (quota amplification); one job record each under a shared `fanOutId`; mid-loop failures keep started tasks running and are reported (`started`/`failed`). Tasks may be plain strings or `{task, cwd}` objects — per-task workspaces enable cross-repo parallel delegation. Response includes ready-made `nextStep` waitAll guidance. **`mode:"race"`**: same task (or variants) to multiple sessions — the first clean completion wins, every other session is aborted and marked cancelled (`race-loser`); returns the winner's response + cost for quality-at-speed or cross-model comparison.
 - **wait** — polls every 5s; returns on idle, on pending permission (`needsInput`), or timeout (with `progress`: latest assistant text tail + todo counts). Responses carry `jobId`, `account` and a todo summary so no extra calls are needed. With `_meta.progressToken` it streams MCP progress frames carrying the live assistant output (SSE `message.part.updated` tracker; interval via `OPENCODE_PROGRESS_INTERVAL_MS`, default 15s).
-- **waitAll** — parallel supervision: wait on up to 12 sessions with one shared deadline; per-session results plus aggregate summary `{total, idle, needsInput, timeout, error}`.
+- **waitAll** — parallel supervision: wait on up to 12 sessions with one shared deadline; per-session results plus aggregate summary `{total, idle, needsInput, timeout, error}`. `waitFor: N` returns early the moment N sessions reach a terminal state (`partial:true` marks the rest as timeout).
 - **status** — with `sessionID`: non-blocking snapshot (failing sub-endpoints become `null`, never errors). Without: batch mode listing the 20 most recent delegate jobs (model, variant, account, tier, retry/resume lineage, errors, timestamps).
 - **diff** — workspace-diff auditing: every delegate/fanOut job snapshots the git HEAD (`gitBase`) at spawn; `diff {sessionID}` returns what the agent changed since — tracked diff `--stat`, changed-file list, untracked files from `git status`, clean flag, non-repo note. Supervision sees the blast radius without touching git yourself.
 - **respond** — answers a pending permission (`once` / `always` / `reject`). Auto-approve/auto-reject regexes live in `config/models.json`.
@@ -198,7 +198,7 @@ Reasoning-effort variants (`high`/`max`) bill reasoning tokens as **output** tok
 ### Testing
 
 ```bash
-npm test            # unit suite (244 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, escalation, job control, clean shutdown, agent injection, race validation, progress streaming, workspace diff + cwd validation
+npm test            # unit suite (289 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, escalation, job control, clean shutdown, agent injection, race validation, progress streaming, workspace diff + cwd validation, personas + routing
 npm run test:e2e    # full delegation round-trip against a real opencode server (needs auth)
 npm run test:stress # permission ask/deny, concurrency, server kill+restart recovery (needs auth)
 npm run test:multiaccount # round-robin rotation across two named credentials, per-account isolation, state persistence (needs auth)
@@ -215,6 +215,15 @@ A weekly workflow (`.github/workflows/models-sync.yml`, Mondays 06:00 UTC) runs
 drifts (new models, retired ids, price changes). Curated fields — tier, default, excluded — are
 always preserved. Enable it by adding an OpenCode API key as the repository secret
 `OPENCODE_DELEGATE_KEY_CI`; without the secret the job exits cleanly with a notice.
+
+### Autonomous delegation routing
+
+A PreToolUse hook (`scripts/delegation-router-hook.mjs`, matcher: `Task`) classifies every
+subagent request before Claude spawns it. Heavy-workload signals — build, test, lint, typecheck,
+refactor, migrate, review/audit keywords, long prompts, generalist agent types — mark the request
+as a strong delegation candidate and inject a ready-made recipe (`delegate {task, tier:1,
+autoRetry:true}` → `wait` → verify → `diff`) into the permission-decision reason. Light tasks
+(explore/find/quick lookups) stay local. The hook never blocks: decisions are always "allow".
 
 ### Delegation notifications hook
 

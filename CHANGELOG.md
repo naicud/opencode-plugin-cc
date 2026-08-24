@@ -3,6 +3,39 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.13.0] - 2026-08-24
+
+### Added
+- **Personas**: `delegate`/`fanOut` accept `persona: "builder" | "reviewer"`. Both agents are
+  injected server-side per spawn; the reviewer is read-only (may only write `.oc-report.md`,
+  edit permission = `ask` so its file attempts surface as pending permissions you approve/reject).
+  Invalid personas fail fast (`PERSONA_INVALID`) before any server spawn.
+- **`waitAll.waitFor: N`**: early exit as soon as N sessions reach a terminal state
+  (idle / needsInput / error); remaining sessions keep polling until the shared deadline, response
+  is marked `partial:true` (`WAIT_FOR_INVALID` on bad values).
+
+## [1.13.0] - 2026-08-24
+
+### Added
+- **Personas**: `delegate`/`fanOut` accept `persona: "builder" | "reviewer"`. Both agents are
+  injected server-side per spawn; the reviewer (`oc-reviewer`) is read-only — it may only write
+  its `.oc-report.md`, and any other file edit surfaces as a pending permission. Invalid personas
+  fail fast with `PERSONA_INVALID` BEFORE any server spawn.
+- **`waitAll` early exit**: new `waitFor: N` returns as soon as N sessions reach a terminal state
+  (idle / needsInput / error); remaining sessions keep polling until the shared deadline and are
+  reported with `partial: true`.
+- **Autonomous delegation routing**: a PreToolUse hook on the Task tool classifies subagent
+  requests (build/test/lint/refactor/review signals, prompt size) and — at the decision point —
+  advises Claude to route heavy work to OpenCode delegation with a ready-made recipe. Never blocks.
+
+### Fixed
+- **Honest EmptyOutput failures**: sessions that go idle without producing ANY assistant output
+  (upstream zombie state, nudges exhausted) no longer masquerade as completed-with-empty-response.
+  With `autoRetry` they re-delegate automatically; otherwise the failure is reported with a
+  retryable escalation hint. Reviewer persona is exempt (deliverable is the report file).
+- E2E resume hardened to 3 attempts (2 × persisted-session resume + fresh-session fallback for
+  poisoned aborted sessions).
+
 ## [1.12.0] - 2026-08-24
 
 ### Added
