@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **Visibility without token burn**: progress frames (the `_meta.progressToken` path Claude Code
+  uses automatically) now stream every ~8s (was 15s) with the full one-line feed — reasoning ·
+  current tool call · assistant tail. These frames render UI-side ONLY and never enter the model
+  context, so watching a delegated subagent costs zero tokens/quota; the call keeps blocking up
+  to 600s instead of slicing. The no-progressToken fallback auto-slice stays as before but its
+  payload is slimmed (tail/reasoning 160 chars, 3 tool lines) to keep even that path cheap.
 - **Automatic live feed from `wait` (classic-subagent feel)**: calls that pin neither
   `timeoutSec` nor a `progressToken` now auto-slice every 60s (`OPENCODE_WAIT_SLICE_SEC`
   override) instead of blocking mutely for up to 600s. Every slice returns a rich activity

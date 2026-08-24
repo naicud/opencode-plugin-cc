@@ -56,9 +56,11 @@ const DEFAULT_WAIT_TIMEOUT_SEC = 600;
 // (override with OPENCODE_WAIT_SLICE_SEC; tests use 1).
 const WAIT_SLICE_SEC = 60;
 // MCP progress notifications: long waits (wait/waitAll/fanOut-race) stream
-// live updates when the caller supplies params._meta.progressToken. Interval
-// override exists for tests/e2e; default keeps stdout quiet.
-const PROGRESS_INTERVAL_MS_DEFAULT = 15_000;
+// live updates when the caller supplies params._meta.progressToken. These
+// frames render in Claude Code's UI ONLY — they never enter the model context,
+// so streaming costs zero tokens/quota. Interval override exists for tests;
+// default keeps the UI lively without spamming.
+const PROGRESS_INTERVAL_MS_DEFAULT = 8_000;
 
 let progressNotifier = null;
 
@@ -1062,14 +1064,14 @@ async function toolWait(args, meta) {
     }
 
     if (Date.now() >= deadline) {
-      // Live progress: at deadline, attach a short tail of the latest assistant
-      // text plus todos so the supervisor sees movement without extra calls.
+      // Live progress: at deadline, attach a SHORT snapshot so auto-sliced
+      // calls stay cheap for the supervisor's context window.
       const progress = await fetchAssistantOutcome(client, args.sessionID).catch(() => null);
       activitySink.note(jobCwd, args.sessionID, "wait", `timeout after ${timeoutSec}s — still busy`);
       const snapshot = {
-        tail: progress?.text?.slice(-300) ?? "",
-        reasoningTail: (watcher.reasoningText?.(args.sessionID) ?? "").slice(-300),
-        tools: activitySink.recentTools(args.sessionID),
+        tail: progress?.text?.slice(-160) ?? "",
+        reasoningTail: (watcher.reasoningText?.(args.sessionID) ?? "").slice(-160),
+        tools: activitySink.recentTools(args.sessionID, 3),
         todos: await summarizeTodos(client, args.sessionID),
       };
       return {
