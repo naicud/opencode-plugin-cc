@@ -46,6 +46,8 @@ The delegation contract (config/models.json) is prepended automatically: it rest
 - `delegate` → save sessionID/jobId
 - `wait` until idle / needsInput / timeout (600s per call); for parallel fan-outs use
   `waitAll` with up to 12 sessionIDs (shared deadline, one result + summary each)
+- `logs {sessionID}` tails the job's activity log — streamed reasoning, assistant output,
+  permission asks, lifecycle transitions — to see what the agent is doing right now
 - `needsInput`: approve only safe read/test commands (`respond once`); reject git push/commit, rm -rf, sudo, curl-to-shell
 - two consecutive timeouts → `abort`
 - blast-radius check → `diff {sessionID}` (tracked diff + untracked files since the job's `gitBase` snapshot)

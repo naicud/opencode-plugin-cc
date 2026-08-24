@@ -2,8 +2,8 @@
 // JSON-RPC 2.0 over stdio, one message per line, zero npm dependencies.
 // Methods: initialize, tools/list, tools/call; anything else with an id → -32601.
 //
-// Nine tools: models, delegate, wait, waitAll, status, respond, abort,
-// shutdown, doctor.
+// Twelve tools: models, delegate, fanOut, wait, waitAll, status, logs, diff,
+// respond, abort, shutdown, doctor.
 // Reachable from Claude Code as mcp__plugin_opencode_oc__<tool> (plugin name
 // is "opencode", server key in .mcp.json is "oc").
 
@@ -30,6 +30,9 @@ import { checkBudget, summarizeBudget } from "./lib/budget.mjs";
 import { runDiagnostics, formatDoctorReport } from "../scripts/lib/doctor.mjs";
 import { createJobRecord } from "../scripts/lib/tracked-jobs.mjs";
 import { loadState, upsertJob, stateBase, generateJobId } from "../scripts/lib/state.mjs";
+import { jobLogPath } from "../scripts/lib/state.mjs";
+import { tailLines } from "../scripts/lib/fs.mjs";
+import { createActivitySink } from "./lib/activity-log.mjs";
 import { getGitRoot } from "../scripts/lib/git.mjs";
 
 /**
@@ -140,6 +143,11 @@ function resolveCwd(args) {
 /** @type {Map<string, { client: object, watcher: object }>} keyed by baseUrl */
 const connections = new Map();
 
+// Shared activity sink: streams SSE session activity (assistant text,
+// reasoning, permissions, errors) into an in-memory per-job buffer consumed
+// by the logs tool. Exported for tests.
+export const activitySink = createActivitySink();
+
 /**
  * Get (or create) a client + permission watcher pair for a workspace/account.
  * Per-account servers coexist on distinct derived ports; each is spawned with
@@ -166,7 +174,11 @@ async function getConnection(cwd, account = null) {
   let conn = connections.get(url);
   if (!conn) {
     const client = createClient(url, { directory: cwd });
-    const watcher = createPermissionWatcher({ client, config: () => loadConfig() });
+    const watcher = createPermissionWatcher({
+      client,
+      config: () => loadConfig(),
+      onEvent: (event) => activitySink.handleEvent(event),
+    });
     watcher.start();
     conn = { client, watcher, account, cwd };
     connections.set(url, conn);
@@ -399,6 +411,12 @@ async function toolDelegate(args) {
       : {}),
   });
   upsertJob(cwd, { id: job.id, status: "running", phase: "delegated" });
+  activitySink.note(
+    cwd,
+    sessionID,
+    "delegate",
+    `job ${job.id} started — model=${selection.model.id}${selection.variant ? ` variant=${selection.variant}` : ""} agent=${agent} persona=${persona}${resumedFrom ? ` resumedFrom=${resumedFrom}` : ""}`
+  );
 
   return {
     sessionID,
@@ -775,6 +793,7 @@ async function toolWait(args, meta) {
     const pending = watcher.pendingList(args.sessionID);
       if (pending.length > 0) {
         const progress = await fetchAssistantOutcome(client, args.sessionID).catch(() => null);
+        activitySink.note(jobCwd, args.sessionID, "wait", "needsInput — permission pending");
         return {
           status: "needsInput",
           sessionID: args.sessionID,
@@ -982,6 +1001,16 @@ async function toolWait(args, meta) {
         (job.persona ?? "builder") !== "reviewer" &&
         !outcome?.text &&
         !outcome?.info?.error;
+      activitySink.note(
+        jobCwd,
+        args.sessionID,
+        "wait",
+        outcome?.info?.error
+          ? `failed — ${outcome.info.error?.data?.message ?? "unknown error"}`
+          : emptyIdleFailed
+            ? "idle with EMPTY output (EmptyOutput)"
+            : `idle — cost=${outcome?.info?.cost ?? 0}`
+      );
       return {
         status: "idle",
         sessionID: args.sessionID,
@@ -1006,13 +1035,22 @@ async function toolWait(args, meta) {
       // Live progress: at deadline, attach a short tail of the latest assistant
       // text plus todos so the supervisor sees movement without extra calls.
       const progress = await fetchAssistantOutcome(client, args.sessionID).catch(() => null);
+      activitySink.note(jobCwd, args.sessionID, "wait", `timeout after ${timeoutSec}s — still busy`);
       return {
         status: "timeout",
         sessionID: args.sessionID,
         jobId: job?.id ?? null,
         account,
         state,
-        ...(progress?.text ? { progress: { tail: progress.text.slice(-300), todos: await summarizeTodos(client, args.sessionID) } } : {}),
+        ...(progress?.text || activitySink.summary(args.sessionID)
+          ? {
+              progress: {
+                tail: progress?.text?.slice(-300) ?? "",
+                reasoningTail: (watcher.reasoningText?.(args.sessionID) ?? "").slice(-300),
+                todos: await summarizeTodos(client, args.sessionID),
+              },
+            }
+          : {}),
       };
     }
     // Sleep the poll interval, but wake instantly when a session.idle SSE
@@ -1023,8 +1061,13 @@ async function toolWait(args, meta) {
     ]);
 
     // Live progress frame (only when the caller passed a progressToken):
-    // latest streamed assistant text straight from the SSE part tracker.
-    emit?.(`waiting ${shortId(args.sessionID)} — ${watcher.assistantText(args.sessionID).replace(/\s+/g, " ").trim().slice(-200) || "no assistant output yet"}`);
+    // rich one-line feed straight from the in-memory activity buffer —
+    // latest reasoning, newest tool call, assistant tail — shown by Claude
+    // Code under the running wait call, like a classic subagent transcript.
+    const liveSummary = activitySink.summary(args.sessionID);
+    emit?.(
+      `waiting ${shortId(args.sessionID)} — ${liveSummary || watcher.assistantText(args.sessionID).replace(/\s+/g, " ").trim().slice(-200) || "no assistant output yet"}`
+    );
   }
 }
 
@@ -1111,6 +1154,79 @@ async function toolStatus(args) {
               .join("\n"),
           }
         : null,
+  };
+}
+
+/**
+ * Activity log viewer: tail the per-job activity log (assistant text,
+ * reasoning, permission asks, lifecycle notes) for a delegated session.
+ * Resolution order: jobId → sessionID → most recent delegate job.
+ */
+async function toolLogs(args) {
+  const cwd = resolveCwd(args);
+  const jobs = loadState(cwd).jobs ?? [];
+  let job = null;
+  if (args.jobId != null) {
+    if (typeof args.jobId !== "string" || !args.jobId.trim()) {
+      throw Object.assign(new Error("jobId must be a non-empty job id or prefix"), { code: "JOB_ID_INVALID" });
+    }
+    const exact = jobs.find((j) => j.id === args.jobId);
+    const prefixMatches = jobs.filter((j) => j.id.startsWith(args.jobId));
+    job = exact ?? (prefixMatches.length === 1 ? prefixMatches[0] : null);
+    if (!job) {
+      throw Object.assign(
+        new Error(`jobId "${args.jobId}" matched ${prefixMatches.length} jobs; use the full id or a unique prefix`),
+        { code: "JOB_NOT_FOUND" }
+      );
+    }
+  } else if (args.sessionID != null) {
+    const found = findJobRecord(cwd, args.sessionID);
+    job = found.job;
+  } else {
+    job = [...jobs]
+      .filter((j) => j.type === "delegate")
+      .sort((a, b) => new Date(b.updatedAt ?? b.createdAt).getTime() - new Date(a.updatedAt ?? a.createdAt).getTime())[0] ?? null;
+  }
+  if (!job) {
+    throw Object.assign(new Error("no delegate job found for this workspace yet"), { code: "LOGS_NO_JOBS" });
+  }
+  const lines = Math.min(Math.max(Number.isInteger(args.lines) ? args.lines : 80, 1), 400);
+  // Primary source: the in-memory activity buffer of THIS server process
+  // (zero files by default). Fallback: an opt-in file mirror written when
+  // OPENCODE_ACTIVITY_LOG=1 was set for terminal follow sessions.
+  let logLines = activitySink.tail(job.id, lines);
+  let hasMirror = false;
+  try {
+    hasMirror = fs.statSync(jobLogPath(job.directory ?? cwd, job.id)).size > 0;
+  } catch {}
+  if (logLines.length === 0 && hasMirror) {
+    logLines = tailLines(jobLogPath(job.directory ?? cwd, job.id), lines);
+  }
+  // Live tails straight from the SSE part tracker — only meaningful while the
+  // session is still running, and only when its server is up (never spawn one
+  // just to read logs).
+  let assistantTail = "";
+  let reasoningTail = "";
+  if (job.status === "running") {
+    try {
+      const conn = await getConnection(job.directory ?? cwd, job.account ?? null);
+      assistantTail = (conn.watcher.assistantText?.(job.sessionID) ?? "").slice(-800);
+      reasoningTail = (conn.watcher.reasoningText?.(job.sessionID) ?? "").slice(-800);
+    } catch {}
+  }
+  return {
+    jobId: job.id,
+    sessionID: job.sessionID ?? null,
+    status: job.status ?? null,
+    phase: job.phase ?? null,
+    model: job.model ?? null,
+    variant: job.variant ?? null,
+    tier: job.tier ?? null,
+    account: job.account ?? null,
+    errorMessage: job.errorMessage ?? null,
+    ...(hasMirror ? { logPath: jobLogPath(job.directory ?? cwd, job.id) } : {}),
+    lines: logLines,
+    live: { running: job.status === "running", assistantTail, reasoningTail },
   };
 }
 
@@ -1572,6 +1688,22 @@ const TOOLS = [
     },
   },
   {
+    name: "logs",
+    title: "Delegation activity log",
+    description:
+      "Tail a delegation's activity log to SEE what the OpenCode agent is doing: streamed assistant output AND chain-of-thought reasoning, permission asks, lifecycle transitions. WITHOUT jobId/sessionID: the most recent delegate job. Also returns live reasoning/output tails for running sessions.",
+    annotations: { readOnlyHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        jobId: { type: "string", description: "Job id or unique prefix (overrides sessionID)" },
+        sessionID: { type: "string", description: "Session id; omit both for the latest delegate job" },
+        lines: { type: "integer", description: "How many log lines to tail (default 80, max 400)" },
+        cwd: { type: "string", description: "Workspace directory" },
+      },
+    },
+  },
+  {
     name: "diff",
     title: "Agent workspace changes",
     description:
@@ -1653,6 +1785,7 @@ const TOOL_HANDLERS = {
   wait: toolWait,
   waitAll: toolWaitAll,
   status: toolStatus,
+  logs: toolLogs,
   diff: toolDiff,
   respond: toolRespond,
   abort: toolAbort,

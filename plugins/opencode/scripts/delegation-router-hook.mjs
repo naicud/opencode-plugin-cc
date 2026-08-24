@@ -56,8 +56,10 @@ if (input && input.tool_name === "Task") {
   if (verdict.route) {
     const advice =
       `${verdict.reason} This subagent task is a strong candidate for OpenCode delegation: ` +
-      `call mcp__plugin_opencode_oc__delegate {task:<the prompt>, tier:1, autoRetry:true}, then wait ` +
-      `{sessionID} until idle, verify artifacts yourself, and use diff {sessionID} for the blast radius.`;
+      `call mcp__plugin_opencode_oc__delegate {task:<the prompt>, autoRetry:true} WITHOUT tier/model ` +
+      `(the resolver picks the configured default free tier — never hardcode a paid tier), then wait ` +
+      `{sessionID} until idle, verify artifacts yourself, use diff {sessionID} for the blast radius, ` +
+      `and mcp__plugin_opencode_oc__logs {sessionID} to see its reasoning and activity.`;
     process.stdout.write(
       JSON.stringify({
         hookSpecificOutput: {

@@ -26,8 +26,8 @@ they already have.
 
 - `/opencode:review` for a normal read-only OpenCode review
 - `/opencode:adversarial-review` for a steerable challenge review
-- `/opencode:rescue`, `/opencode:status`, `/opencode:result`, and `/opencode:cancel` to delegate work and manage background jobs
-- `/opencode:delegate` plus **eleven MCP tools** (`models`, `delegate`, `fanOut`, `wait`, `waitAll`, `status`, `diff`, `respond`, `abort`, `shutdown`, `doctor`) and `/opencode:parallel` for batch fan-out reachable as `mcp__plugin_opencode_oc__*` for tiered, budget-aware, multi-account delegation to OpenCode models with full supervision (permissions, escalation with optional auto-retry, retry chains, session resume), spend limits, workspace-diff auditing, and clean process lifecycle
+- `/opencode:rescue`, `/opencode:status`, `/opencode:logs`, `/opencode:result`, and `/opencode:cancel` to delegate work and manage background jobs
+- `/opencode:delegate` plus **twelve MCP tools** (`models`, `delegate`, `fanOut`, `wait`, `waitAll`, `status`, `logs`, `diff`, `respond`, `abort`, `shutdown`, `doctor`) and `/opencode:parallel` for batch fan-out reachable as `mcp__plugin_opencode_oc__*` for tiered, budget-aware, multi-account delegation to OpenCode models with full supervision (permissions, escalation with optional auto-retry, retry chains, session resume), spend limits, workspace-diff auditing, and clean process lifecycle
 
 ## Requirements
 
@@ -53,7 +53,7 @@ Then reload the plugin:
 You should see:
 
 ```
-Reloaded: 1 plugin · 4 skills · 2 agents · 4 hooks ...
+Reloaded: 1 plugin · 5 skills · 2 agents · 4 hooks ...
 ```
 
 Finally, verify your setup:
@@ -98,7 +98,7 @@ the Apache-2.0 license.
 
 | Capability | codex-plugin-cc | opencode-plugin-cc |
 |---|---|---|
-| Delegation runtime | companion-script review flow | **11-tool MCP server** (`models`, `delegate`, `fanOut`, `wait`, `waitAll`, `status`, `diff`, `respond`, `abort`, `shutdown`, `doctor`), JSON-RPC stdio, zero npm deps |
+| Delegation runtime | companion-script review flow | **12-tool MCP server** (`models`, `delegate`, `fanOut`, `wait`, `waitAll`, `status`, `logs`, `diff`, `respond`, `abort`, `shutdown`, `doctor`), JSON-RPC stdio, zero npm deps |
 | Model selection | n/a | tiered catalog (4 curated models), client-side variant resolution with strict max-effort chains (no silent downgrade) |
 | Cost visibility | n/a | real USD/Mtok costs per tier + `costTable`, live merge with `/config/providers` |
 | Quota scaling | single account | **multi-account routing**: `OPENCODE_DELEGATE_KEY_<ACCOUNT>` env keys → per-account server spawn via `OPENCODE_AUTH_CONTENT`, fixed / round-robin LRU strategies, distinct ports per workspace+account |
@@ -124,6 +124,7 @@ the Apache-2.0 license.
 - `/opencode:adversarial-review` -- Steerable review that challenges implementation and design decisions. Accepts custom focus text.
 - `/opencode:rescue` -- Delegates a task to OpenCode via the `opencode:opencode-rescue` subagent. Supports `--model`, `--agent`, `--resume`, `--fresh`, `--background`.
 - `/opencode:status` -- Shows running/recent OpenCode jobs for the current repo.
+- `/opencode:logs` -- Live activity log of a delegation: reasoning, assistant output, tool-call transitions, permission asks. `-f` follows the stream like the OpenCode TUI.
 - `/opencode:result` -- Shows final output for a finished job, including OpenCode session ID for resuming.
 - `/opencode:cancel` -- Cancels an active background OpenCode job.
 - `/opencode:setup` -- Checks OpenCode install/auth, can enable/disable the review gate hook.
@@ -135,7 +136,7 @@ the Apache-2.0 license.
 
 ## Model Delegation (MCP)
 
-The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over stdio, zero npm deps) exposing **eleven tools**, reachable as `mcp__plugin_opencode_oc__models|delegate|fanOut|wait|waitAll|status|diff|respond|abort|shutdown|doctor`:
+The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over stdio, zero npm deps) exposing **twelve tools**, reachable as `mcp__plugin_opencode_oc__models|delegate|fanOut|wait|waitAll|status|logs|diff|respond|abort|shutdown|doctor`:
 
 - **models** — merged catalog (file + live `/config/providers`) with tiers, variants, real costs (`costTable`: USD per Mtok in/out), effort policy, accounts overview and budget hint.
 - **delegate** — resolves model+variant client-side (the server accepts any variant string and silently falls back to base — see `docs/opencode-api-findings.md` P2), creates a titled session, fires `prompt_async` with the work contract from `config/models.json`, records a job visible to `status`. Extras: `persona` picks the injected server-side agent (`builder` = full write access; `reviewer` = read-only, may only write `.oc-report.md` — its edit attempts surface as pending permissions), `retryOf` links a re-run to a failed/cancelled job, `resumeSessionID` continues an existing persisted session (crash recovery / multi-step), `account` routes quota across pooled accounts, `title` overrides the session name, `autoRetry: true` re-delegates ONCE at the escalation-suggested model+variant if the run dies with a retryable error (returns `status:"retried"` + new sessionID). Enforced guards: `config.concurrency.maxDelegates` cap and `config.budget` spend limits (`DELEGATE_LIMIT_EXCEEDED`, `BUDGET_JOB_MAX`, `BUDGET_DAILY_MAX`).
@@ -143,6 +144,13 @@ The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over
 - **wait** — polls every 5s; returns on idle, on pending permission (`needsInput`), or timeout (with `progress`: latest assistant text tail + todo counts). Responses carry `jobId`, `account` and a todo summary so no extra calls are needed. With `_meta.progressToken` it streams MCP progress frames carrying the live assistant output (SSE `message.part.updated` tracker; interval via `OPENCODE_PROGRESS_INTERVAL_MS`, default 15s).
 - **waitAll** — parallel supervision: wait on up to 12 sessions with one shared deadline; per-session results plus aggregate summary `{total, idle, needsInput, timeout, error}`. `waitFor: N` returns early the moment N sessions reach a terminal state (`partial:true` marks the rest as timeout).
 - **status** — with `sessionID`: non-blocking snapshot (failing sub-endpoints become `null`, never errors). Without: batch mode listing the 20 most recent delegate jobs (model, variant, account, tier, retry/resume lineage, errors, timestamps).
+- **logs** — SEE what the delegated agent is doing, **no files involved**: an in-memory activity
+  buffer captures the session's chain-of-thought reasoning, assistant output, **tool-call
+  transitions** (`bash (running) {…}`), permission asks and lifecycle notes as they stream in over
+  SSE. `logs {jobId?|sessionID?|lines?}` tails that buffer (latest delegate job by default) and
+  returns live `assistantTail`/`reasoningTail` for running sessions. Set
+  `OPENCODE_ACTIVITY_LOG=1` before launching Claude Code to ALSO mirror each job's feed to
+  `<state>/jobs/<jobId>.log` for terminal follow sessions (`node plugins/opencode/scripts/oc-logs.mjs -f`).
 - **diff** — workspace-diff auditing: every delegate/fanOut job snapshots the git HEAD (`gitBase`) at spawn; `diff {sessionID}` returns what the agent changed since — tracked diff `--stat`, changed-file list, untracked files from `git status`, clean flag, non-repo note. Supervision sees the blast radius without touching git yourself.
 - **respond** — answers a pending permission (`once` / `always` / `reject`). Auto-approve/auto-reject regexes live in `config/models.json`.
 - **abort** — kills a runaway session and marks the job cancelled.
@@ -213,7 +221,7 @@ npm run bench       # benchmark curated tiers: same micro-task per tier, markdow
 
 CI runs the unit matrix on ubuntu + windows (Node 20/22) plus a **windows-smoke** job that
 installs the real opencode CLI and boots the MCP server over stdio on Windows — verifying the
-handshake, all eleven tools, and doctor's binary/state-dir checks on win32.
+handshake, all twelve tools, and doctor's binary/state-dir checks on win32.
 
 ### Tier benchmark (real run)
 
@@ -242,9 +250,10 @@ always preserved. Enable it by adding an OpenCode API key as the repository secr
 A PreToolUse hook (`scripts/delegation-router-hook.mjs`, matcher: `Task`) classifies every
 subagent request before Claude spawns it. Heavy-workload signals — build, test, lint, typecheck,
 refactor, migrate, review/audit keywords, long prompts, generalist agent types — mark the request
-as a strong delegation candidate and inject a ready-made recipe (`delegate {task, tier:1,
-autoRetry:true}` → `wait` → verify → `diff`) into the permission-decision reason. Light tasks
-(explore/find/quick lookups) stay local. The hook never blocks: decisions are always "allow".
+as a strong delegation candidate and inject a ready-made recipe (`delegate {task, autoRetry:true}`
+with NO tier/model so the resolver applies the configured default free tier → `wait` → verify →
+`diff` → `logs`) into the permission-decision reason. Light tasks (explore/find/quick lookups)
+stay local. The hook never blocks: decisions are always "allow".
 
 The keyword lists and thresholds are **config-driven** — add a `routing` section to
 `config/models.json` (or point `OPENCODE_MODELS_CONFIG` elsewhere):
@@ -262,6 +271,22 @@ The keyword lists and thresholds are **config-driven** — add a `routing` secti
 User keywords merge over the built-in defaults; invalid entries are ignored silently;
 `threshold` is the score a request must reach to route (default `3`; heavy/review signals +2 each,
 long prompt +1, light signals −1, generalist agent type +1).
+
+### Proactive routing skill & agent triggers
+
+Delegation should fire when the USER asks for it — not on every task. Two system-prompt-level
+signals make that match happen before any hook runs:
+
+- **`skills/opencode-routing/SKILL.md`** — trigger-rich description ("subagents, delegation,
+  parallel workers, background tasks, fan-out") plus an explicit guard: routine single-file edits,
+  exploration and quick questions stay on the main thread. When in doubt, don't delegate.
+- **Agent descriptions** (`agents/opencode-delegate.md`) carry the same proactive triggers and the
+  same exclusions, so Claude Code's subagent matcher picks `opencode-delegate` for "manda un
+  subagente"-style asks instead of a built-in generalist.
+
+The PreToolUse router hook remains the second line of defense: it only advises at the moment a
+`Task` call is already being spawned, and its recipe now follows the free-tier policy (no hardcoded
+tier).
 
 ### Delegation notifications hook
 
@@ -370,7 +395,7 @@ The server is automatically started and managed per workspace (and per account) 
 
 ```mermaid
 flowchart LR
-    CC["Claude Code"] -->|"MCP stdio<br/>JSON-RPC 2.0"| SRV["mcp/server.mjs<br/>11 tools, zero deps"]
+    CC["Claude Code"] -->|"MCP stdio<br/>JSON-RPC 2.0"| SRV["mcp/server.mjs<br/>12 tools, zero deps"]
     SRV --> ES["ensureServer()<br/>port = 4100 + sha256(cwd+account) % 400"]
     ES -->|spawn detached<br/>OPENCODE_PERMISSION / _CONFIG / _AUTH_CONTENT| OC["opencode serve<br/>127.0.0.1:PORT"]
     SRV -->|"POST /session (prompt_async)"| OC

@@ -57,7 +57,7 @@ export function classifyPermission(perm, rules = {}) {
  * @returns {{ start: () => void, stop: () => Promise<void>, pending: (sessionID?: string) => object[] }}
  */
 export function createPermissionWatcher(opts) {
-  const { client, config: configOrGetter, onAuto } = opts;
+  const { client, config: configOrGetter, onAuto, onEvent } = opts;
   const resolveRules =
     typeof configOrGetter === "function"
       ? () => {
@@ -120,6 +120,9 @@ export function createPermissionWatcher(opts) {
     handleReply(event);
     handleIdle(event);
     partTracker.handleEvent(event);
+    try {
+      onEvent?.(event);
+    } catch {}
   }
 
   async function loop() {
@@ -160,6 +163,13 @@ export function createPermissionWatcher(opts) {
      */
     assistantText(sessionID) {
       return partTracker.assistantText(sessionID);
+    },
+    /**
+     * Latest accumulated chain-of-thought reasoning for a session, from live
+     * message.part.updated SSE events ("" when nothing streamed yet).
+     */
+    reasoningText(sessionID) {
+      return partTracker.reasoningText(sessionID);
     },
     /**
      * Resolve true as soon as a session.idle SSE event arrives for the given

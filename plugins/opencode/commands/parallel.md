@@ -1,7 +1,7 @@
 ---
 description: Fan out MULTIPLE tasks in parallel to OpenCode and supervise the batch
 argument-hint: '[--race] [--tier N] [--model <id>] [--effort max|high|off] [--account <name|auto>] <task1> ;; <task2> ;; <task3>'
-allowed-tools: Bash(node:*), mcp__plugin_opencode_oc__models, mcp__plugin_opencode_oc__fanOut, mcp__plugin_opencode_oc__waitAll, mcp__plugin_opencode_oc__status, mcp__plugin_opencode_oc__respond, mcp__plugin_opencode_oc__abort, mcp__plugin_opencode_oc__shutdown, mcp__plugin_opencode_oc__doctor, mcp__plugin_opencode_oc__diff
+allowed-tools: Bash(node:*), mcp__plugin_opencode_oc__models, mcp__plugin_opencode_oc__fanOut, mcp__plugin_opencode_oc__waitAll, mcp__plugin_opencode_oc__status, mcp__plugin_opencode_oc__logs, mcp__plugin_opencode_oc__respond, mcp__plugin_opencode_oc__abort, mcp__plugin_opencode_oc__shutdown, mcp__plugin_opencode_oc__doctor, mcp__plugin_opencode_oc__diff
 ---
 
 Fan out multiple tasks to OpenCode in parallel through the MCP tools.

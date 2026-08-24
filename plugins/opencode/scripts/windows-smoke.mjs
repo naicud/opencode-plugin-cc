@@ -14,6 +14,7 @@ const EXPECTED_TOOLS = [
   "diff",
   "doctor",
   "fanOut",
+  "logs",
   "models",
   "respond",
   "shutdown",
@@ -114,7 +115,17 @@ try {
   const binaryCheck = report.checks.find((c) => c.name === "opencode-binary");
   if (!binaryCheck) fail("doctor missing opencode-binary check");
   if (binaryCheck.status !== "pass") {
-    fail(`opencode-binary not usable on this runner: ${binaryCheck.status} — ${binaryCheck.detail}`);
+    // Fresh CI runners occasionally race the npm-global PATH refresh right
+    // after `npm i -g`. Retry a few times before declaring the binary dead.
+    let last = binaryCheck;
+    for (let attempt = 0; attempt < 3 && last.status !== "pass"; attempt++) {
+      await new Promise((r) => setTimeout(r, 4000));
+      const retry = parseResult(await rpc("tools/call", { name: "doctor", arguments: {} }).catch((e) => fail(`doctor retry: ${e.message}`)));
+      last = retry.checks?.find((c) => c.name === "opencode-binary") ?? retry;
+    }
+    if (last.status !== "pass") {
+      fail(`opencode-binary not usable on this runner: ${last.status} — ${last.detail} (PATH=${process.env.PATH ?? "?"})`);
+    }
   }
   console.log("doctor ok:", report.ok ? "ok" : `problems (${report.report.split("\n").length - 1} lines)`);
 

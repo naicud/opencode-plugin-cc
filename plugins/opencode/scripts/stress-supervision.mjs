@@ -158,7 +158,7 @@ async function main() {
     const names = (list.result?.tools ?? []).map((t) => t.name).sort();
     if (
       JSON.stringify(names) !==
-      JSON.stringify(["abort", "delegate", "diff", "doctor", "fanOut", "models", "respond", "shutdown", "status", "wait", "waitAll"])
+      JSON.stringify(["abort", "delegate", "diff", "doctor", "fanOut", "logs", "models", "respond", "shutdown", "status", "wait", "waitAll"])
     ) {
       throw new StressError(`tools/list mismatch: ${names}`);
     }

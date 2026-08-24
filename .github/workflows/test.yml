@@ -32,7 +32,7 @@ jobs:
 
   windows-smoke:
     # Real-binary smoke on Windows: boots the MCP server over stdio with the
-    # actual opencode CLI installed, verifies handshake + 11 tools + doctor
+    # actual opencode CLI installed, verifies handshake + 12 tools + doctor
     # (binary discovery + state dir). Unit matrix alone never exercises this.
     runs-on: windows-latest
     steps:
@@ -42,5 +42,12 @@ jobs:
           node-version: 22
       - name: Install opencode CLI
         run: npm i -g opencode-ai
+      - name: Pin npm global bin to PATH (runner PATH refresh race)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $prefix = (npm config get prefix).Trim()
+          Add-Content $env:GITHUB_PATH $prefix
+          Write-Host "npm global prefix pinned to PATH: $prefix"
       - name: MCP stdio smoke against the real binary
         run: node plugins/opencode/scripts/windows-smoke.mjs

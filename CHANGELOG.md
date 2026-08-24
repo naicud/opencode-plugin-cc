@@ -3,6 +3,48 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **Live activity visibility — zero files by default**: every delegated session's
+  chain-of-thought reasoning, assistant output, **tool-call state transitions**
+  (`bash (running) {command…}`, deduped per status), permission asks and lifecycle notes are
+  captured in an in-memory per-job buffer inside the MCP server.
+  - `wait` progress frames now stream a rich one-line feed (reasoning · latest tool · assistant
+    tail) into Claude Code's console under the running call — like watching a classic subagent.
+  - New `mcp__plugin_opencode_oc__logs {jobId?|sessionID?|lines?}` tool tails that buffer
+    (latest delegate job by default) plus live `assistantTail`/`reasoningTail` for running
+    sessions; wired into the `opencode-delegate` agent and delegate/parallel commands.
+    Tool count is now twelve.
+  - Opt-in disk mirror (`OPENCODE_ACTIVITY_LOG=1`) enables the terminal follower
+    `node plugins/opencode/scripts/oc-logs.mjs -f` and the new `/opencode:logs` command.
+- **Proactive routing skill** (`skills/opencode-routing/SKILL.md`): trigger-rich description
+  ("subagents, delegation, parallel workers, background tasks, fan-out") with an explicit
+  anti-overuse guard — routine single-file edits, exploration and quick questions stay local.
+  Delegation fires when the user asks for it, not on every task.
+
+### Changed
+- **Agent trigger phrases**: `opencode-delegate` description now says "Use PROACTIVELY when the
+  user asks for subagents, delegation, parallel workers, background tasks or fan-out work" plus
+  explicit exclusions — this is the field Claude Code matches user wording against.
+- Part tracker captures `reasoning` parts alongside text; permission watcher exposes
+  `reasoningText()` and an optional `onEvent` sink hook.
+- Catalog resync (2026-08-24): metadata refresh only — same 62 ids, contract/defaults/policies/
+  excluded untouched. Live catalog currently offers NO free model beyond the seven already
+  configured (big-pickle, hy3-free, mimo-v2.5-free, nemotron-3-ultra-free,
+  nemotron-3.5-lightning-free, ox-alpha-free, x-preview-f-free); `addModel`→validate→resolve
+  path re-verified for future additions (duplicate guard, tier-0 resolution).
+
+### Fixed
+- **Router hook tier inconsistency**: delegation advice no longer hardcodes `tier:1` (a paid
+  tier under the current free-only policy) — it instructs `delegate {task, autoRetry:true}`
+  without tier/model so the resolver applies `defaults.tier: 0`.
+- **Windows CI flake (`windows-smoke`)**: the smoke job could fail right after `npm i -g`
+  with "opencode not found on PATH" — a runner PATH-refresh race. Fixes: npm global prefix is
+  pinned to PATH via `GITHUB_PATH`, `resolveOpencodeCommand()` additionally probes the standard
+  `%APPDATA%\npm` shim locations when `where.exe` misses, negative lookups are no longer cached
+  (so retries heal), and the smoke script retries doctor's binary check 3× before failing.
+
 ## [1.15.1] - 2026-08-24
 
 ### Fixed
