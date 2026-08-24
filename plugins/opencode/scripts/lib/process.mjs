@@ -1,6 +1,7 @@
 // Process utilities for the OpenCode companion.
 
 import { spawn } from "node:child_process";
+import { resolveOpencodeCommand } from "./opencode-bin.mjs";
 
 /**
  * Resolve the full path to the `opencode` binary.
@@ -30,7 +31,8 @@ export async function isOpencodeInstalled() {
  */
 export async function getOpencodeVersion() {
   return new Promise((resolve) => {
-    const proc = spawn("opencode", ["--version"], {
+    const { command, prefix } = resolveOpencodeCommand();
+    const proc = spawn(command, [...prefix, "--version"], {
       stdio: ["ignore", "pipe", "ignore"],
     });
     let out = "";

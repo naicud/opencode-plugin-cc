@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.15.1] - 2026-08-24
+
+### Fixed
+- **Windows: opencode CLI resolution.** npm installs the CLI as a `.cmd` shim on Windows, which Node cannot exec directly — `ensureServer`, doctor's binary check and version probing all failed with ENOENT on real Windows machines even with the CLI installed. New shared resolver (`scripts/lib/opencode-bin.mjs`) uses `where.exe` (prefers the real `.exe`), falls back to routing through `cmd.exe /c`; wired into server spawn, doctor and version probe.
+
 ## [1.15.0] - 2026-08-24
 
 ### Added

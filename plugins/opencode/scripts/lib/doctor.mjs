@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { stateRoot, loadState } from "./state.mjs";
 import { derivePort, isServerRunning, readServerRegistry } from "./opencode-server.mjs";
+import { resolveOpencodeCommand } from "./opencode-bin.mjs";
 import { envKeyName } from "../../mcp/lib/accounts.mjs";
 
 const STATUS_TAG = { pass: "PASS", warn: "WARN", fail: "FAIL", skip: "SKIP" };
@@ -50,7 +51,8 @@ export async function runDiagnostics({ cwd = process.cwd(), config = null, check
     await guarded("opencode-binary", () => {
       let version;
       try {
-        version = execFileSync("opencode", ["--version"], { timeout: 8000, encoding: "utf8" }).trim();
+        const { command, prefix } = resolveOpencodeCommand();
+        version = execFileSync(command, [...prefix, "--version"], { timeout: 8000, encoding: "utf8" }).trim();
       } catch (err) {
         if (err?.code === "ENOENT") throw new Error("opencode not found on PATH");
         throw err;

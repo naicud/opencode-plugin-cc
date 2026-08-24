@@ -5,9 +5,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { stateRoot } from "./state.mjs";
 import { writeJson } from "./fs.mjs";
+import { resolveOpencodeCommand } from "./opencode-bin.mjs";
 import {
   isProcessAlive,
   getProcessCommand,
@@ -322,9 +323,10 @@ export async function ensureServer(opts = {}) {
   if (opts.configPath != null) env.OPENCODE_CONFIG = opts.configPath;
   if (authContentEnv != null) env.OPENCODE_AUTH_CONTENT = authContentEnv;
   if (configContentEnv != null) env.OPENCODE_CONFIG_CONTENT = configContentEnv;
+  const { command, prefix } = resolveOpencodeCommand();
   const proc = spawn(
-    "opencode",
-    ["serve", "--port", String(port), "--hostname", host],
+    command,
+    [...prefix, "serve", "--port", String(port), "--hostname", host],
     { stdio: ["ignore", logStream, logStream], detached: true, cwd, env }
   );
   proc.unref();
