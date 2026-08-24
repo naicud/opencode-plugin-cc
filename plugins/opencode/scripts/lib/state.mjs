@@ -3,6 +3,7 @@
 // JSON state file, per-job files and logs.
 
 import crypto from "node:crypto";
+import os from "node:os";
 import path from "node:path";
 import { ensureDir, readJson, writeJson } from "./fs.mjs";
 
@@ -17,7 +18,10 @@ const MAX_JOBS = 50;
 export function stateBase() {
   return process.env.CLAUDE_PLUGIN_DATA
     ? path.join(process.env.CLAUDE_PLUGIN_DATA, "state")
-    : path.join("/tmp", "opencode-companion");
+    : // Keep the literal "/tmp" default on POSIX so existing installs do not
+      // migrate state; os.tmpdir() is the correct Windows fallback (the naive
+      // join("/tmp", ...) would resolve to "C:\tmp").
+      path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "opencode-companion");
 }
 
 /**

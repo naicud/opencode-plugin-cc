@@ -165,6 +165,8 @@ export const activitySink = createActivitySink();
 // seen — this is what makes the hygiene reaper's deferred deletion safe.
 const reportsDelivered = new Set();
 const REPORT_MAX_CHARS = 8000;
+// Safety valve for very long-lived server processes.
+const MAX_TRACKED_REPORTS = 500;
 
 /**
  * Read the contract report (.oc-report.md) a delegated agent wrote in the
@@ -183,7 +185,10 @@ export function readReportSnapshot(cwd, jobId = null) {
   }
   const status = (raw.split("\n", 1)[0] ?? "").trim() || null;
   const alreadyDelivered = jobId != null && reportsDelivered.has(jobId);
-  if (jobId != null) reportsDelivered.add(jobId);
+  if (jobId != null) {
+    if (reportsDelivered.size >= MAX_TRACKED_REPORTS) reportsDelivered.clear();
+    reportsDelivered.add(jobId);
+  }
   const base = { path: file, status, chars: raw.length, truncated: raw.length > REPORT_MAX_CHARS };
   return alreadyDelivered
     ? { ...base, deliveredBefore: true }

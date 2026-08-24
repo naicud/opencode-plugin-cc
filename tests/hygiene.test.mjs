@@ -131,6 +131,16 @@ describe("hygiene sweepStateDirs", () => {
     assert.equal(fs.readdirSync(jobsDir).length, 0);
   });
 
+  it("removes base-level crash leftovers (activity-buffer.json.tmp.*) but never the buffer itself", () => {
+    fs.writeFileSync(path.join(base, "activity-buffer.json.tmp.4242"), "{}");
+    fs.writeFileSync(path.join(base, "activity-buffer.json"), "{}");
+    age(path.join(base, "activity-buffer.json.tmp.4242"), 20);
+    const res = sweepStateDirs({ baseDir: base, now: new Date(), stateTtlMs: 14 * DAY, reportTtlMs: null });
+    assert.ok(res.removedTmpFiles.includes("activity-buffer.json.tmp.4242"));
+    assert.ok(!fs.existsSync(path.join(base, "activity-buffer.json.tmp.4242")));
+    assert.ok(fs.existsSync(path.join(base, "activity-buffer.json")), "live buffer must survive");
+  });
+
   describe(".oc-report.md reaper", () => {
     function workspaceWithReport(name, jobStatus) {
       const ws = path.join(wsRoot, `ws-${name}`);
@@ -219,5 +229,40 @@ describe("hygiene sweepStateDirs", () => {
     assert.equal(stateTtlMsFromEnv(), null, "0 disables the whole sweep");
     delete process.env.OPENCODE_STATE_TTL_DAYS;
     delete process.env.OPENCODE_REPORT_TTL_DAYS;
+  });
+
+  it("reaps abandoned oc-e2e/oc-demo/oc-bench temp workspaces in tmpdir", async () => {
+    const os = await import("node:os");
+    const tmpRoot = createTmpDir("hygiene-tmp");
+    const stale = path.join(tmpRoot, "oc-e2e-abcd");
+    const fresh = path.join(tmpRoot, "oc-demo-efgh");
+    const foreign = path.join(tmpRoot, "not-ours-e2e-");
+    fs.mkdirSync(stale);
+    fs.mkdirSync(fresh);
+    fs.mkdirSync(foreign);
+    age(path.join(stale), 30);
+    const res = sweepStateDirs({
+      baseDir: base,
+      now: new Date(),
+      stateTtlMs: 14 * DAY,
+      reportTtlMs: null,
+      tmpDir: tmpRoot,
+    });
+    assert.ok(res.removedDirs.includes("oc-e2e-abcd"), "stale dev workspace reaped");
+    assert.ok(!fs.existsSync(stale));
+    assert.ok(fs.existsSync(fresh), "fresh dev workspace survives");
+    assert.ok(fs.existsSync(foreign), "non-plugin dirs never touched");
+
+    // dryRun leaves everything in place
+    const dry = sweepStateDirs({
+      baseDir: base,
+      now: new Date(),
+      stateTtlMs: 14 * DAY,
+      reportTtlMs: null,
+      tmpDir: tmpRoot,
+      dryRun: true,
+    });
+    cleanupTmpDir(tmpRoot);
+    assert.ok(Array.isArray(dry.removedDirs));
   });
 });

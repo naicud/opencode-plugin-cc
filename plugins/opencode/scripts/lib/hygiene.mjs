@@ -25,6 +25,8 @@ import { isProcessAlive } from "./process-identity.mjs";
 export const DEFAULT_STATE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 /** Default TTL for consumed .oc-report.md files: 7 days. */
 export const DEFAULT_REPORT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** Temp workspaces created by dev/demo/e2e tooling under os.tmpdir(). */
+const TMP_WORKSPACE_RE = /^oc-(?:e2e|demo|bench)[a-z-]*-/;
 
 /**
  * State TTL from env (OPENCODE_STATE_TTL_DAYS). Null disables the sweep.
@@ -150,6 +152,20 @@ export function sweepStateDirs(opts = {}) {
     return result;
   }
 
+  // ---- rule 0: crash leftovers at the base level (activity-buffer.json.tmp.*) ----
+  let baseEntries = [];
+  try {
+    baseEntries = fs.readdirSync(base);
+  } catch {}
+  for (const f of baseEntries) {
+    if (!/\.tmp\./.test(f)) continue;
+    const file = path.join(base, f);
+    if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) continue;
+    if (nowTs - mtimeMs(file) > stateTtl) {
+      if (opts.dryRun || removeFile(file)) result.removedTmpFiles.push(f);
+    }
+  }
+
   let hashes = [];
   try {
     hashes = fs.readdirSync(base);
@@ -266,6 +282,31 @@ export function sweepStateDirs(opts = {}) {
       } catch (err) {
         result.errors.push(`${report}: ${err?.message ?? String(err)}`);
       }
+    }
+  }
+
+  // ---- rule 4: abandoned dev/e2e/demo temp workspaces in os.tmpdir() --------
+  const tmpRoot = opts.tmpDir ?? os.tmpdir();
+  let tmpEntries = [];
+  try {
+    tmpEntries = fs.readdirSync(tmpRoot);
+  } catch {}
+  for (const name of tmpEntries) {
+    if (!TMP_WORKSPACE_RE.test(name)) continue;
+    const dir = path.join(tmpRoot, name);
+    let st;
+    try {
+      st = fs.statSync(dir);
+    } catch {
+      continue;
+    }
+    if (!st.isDirectory()) continue;
+    if (nowTs - Math.max(st.mtimeMs, newestChildMtime(dir)) <= stateTtl) continue;
+    try {
+      if (!opts.dryRun) fs.rmSync(dir, { recursive: true, force: true });
+      result.removedDirs.push(name);
+    } catch (err) {
+      result.errors.push(`${name}: ${err?.message ?? String(err)}`);
     }
   }
 
