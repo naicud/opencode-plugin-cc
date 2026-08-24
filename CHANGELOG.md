@@ -3,6 +3,39 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.18.0] - 2026-08-24
+
+### Added
+- **Logs finally visible in Claude's MCP tab**: the server now declares the MCP `logging`
+  capability, answers `logging/setLevel` and emits `notifications/message` frames on every
+  lifecycle event — boot, delegate/fanOut start, session idle / needs-input / failure,
+  shutdown, hygiene sweeps, tool errors (throttled, zero spam). Every line is mirrored to
+  stderr (`[opencode:<level>] …`) for `claude --mcp-debug`. Root cause of the silence: the
+  progress frames that existed before require a caller-supplied `progressToken`, which Claude
+  Code does not send by default.
+- **Zero-litter guarantee — disk hygiene reaper**: one TTL-based sweep (`hygiene.mjs`) now owns
+  every file the plugin ever writes, running at MCP-server boot, hourly on long-lived servers,
+  in the `SessionEnd` hook and on demand via `shutdown { cleanState: true }`. Five rules:
+  stale per-workspace state dirs (>14d, no live tracked server), orphaned job files dropped by
+  the MAX_JOBS prune, crash-leftover `*.tmp.*` files (base level + hash dirs + state files),
+  consumed `.oc-report.md` reports (>7d, terminal jobs only, plugin-known workspaces only),
+  abandoned `oc-e2e-*` / `oc-demo-*` / `oc-bench-*` dev workspaces in the OS temp dir. Safety
+  rails: live pids freeze their dir, fresh files are never touched (spawn-race safe), `/` and
+  the home directory are refused, everything is previewable with a dry run. Knobs:
+  `OPENCODE_STATE_TTL_DAYS` / `OPENCODE_REPORT_TTL_DAYS` (0 disables).
+- **Doctor hygiene preview**: new `[PASS] hygiene` check shows exactly what the next sweep
+  would clean (dry run, removes nothing).
+- **`.oc-report.md` delivered inline**: when a delegated session reaches idle without error,
+  `wait` embeds the report content in the response (first call only, capped at 8k chars) —
+  the supervisor reads it without an extra Read, which also makes the deferred report deletion
+  safe.
+
+### Fixed
+- **Windows state location**: the no-env fallback built `/tmp/opencode-companion`, which on
+  Windows resolved to `C:\tmp\...`; win32 now falls back to `os.tmpdir()` while POSIX keeps the
+  literal `/tmp` path so existing installations do not migrate state.
+- Duplicate `budget:` key in the `models` tool result (last key silently won).
+
 ## [1.17.0] - 2026-08-24
 
 ### Added
