@@ -151,6 +151,8 @@ The plugin ships an MCP server (`plugins/opencode/mcp/server.mjs`, JSON-RPC over
   returns live `assistantTail`/`reasoningTail` for running sessions. Set
   `OPENCODE_ACTIVITY_LOG=1` before launching Claude Code to ALSO mirror each job's feed to
   `<state>/jobs/<jobId>.log` for terminal follow sessions (`node plugins/opencode/scripts/oc-logs.mjs -f`).
+  The in-memory buffer itself survives MCP server restarts: a throttled snapshot
+  (`<pluginData>/state/activity-buffer.json`, last 300 lines × last 100 jobs) is reloaded on demand.
 - **diff** — workspace-diff auditing: every delegate/fanOut job snapshots the git HEAD (`gitBase`) at spawn; `diff {sessionID}` returns what the agent changed since — tracked diff `--stat`, changed-file list, untracked files from `git status`, clean flag, non-repo note. Supervision sees the blast radius without touching git yourself.
 - **respond** — answers a pending permission (`once` / `always` / `reject`). Auto-approve/auto-reject regexes live in `config/models.json`.
 - **abort** — kills a runaway session and marks the job cancelled.
@@ -299,6 +301,11 @@ drifts (new models, retired ids, price changes). Curated fields — tier, defaul
 always preserved. Enable it by adding an OpenCode API key as the repository secret
 `OPENCODE_DELEGATE_KEY_CI`; without the secret the job exits cleanly with a notice.
 
+New FREE models are flagged automatically: `npm run models:sync` prints
+`NEW free models detected: <ids>` and `--auto-free` promotes them straight to tier 0 (the curated
+default never loses its flag). See [Adding models to the catalog](#adding-models-to-the-catalog-step-by-step)
+for the manual path.
+
 ### Autonomous delegation routing
 
 A PreToolUse hook (`scripts/delegation-router-hook.mjs`, matcher: `Task`) classifies every
@@ -307,7 +314,11 @@ refactor, migrate, review/audit keywords, long prompts, generalist agent types �
 as a strong delegation candidate and inject a ready-made recipe (`delegate {task, autoRetry:true}`
 with NO tier/model so the resolver applies the configured default free tier → `wait` → verify →
 `diff` → `logs`) into the permission-decision reason. Light tasks (explore/find/quick lookups)
-stay local. The hook never blocks: decisions are always "allow".
+stay local. The hook never blocks: decisions are always "allow". Built-in keywords cover English
+AND Italian on both sides — delegation intent ("delega", "subagente/i", "in parallelo",
+"fan out", "workers"…) scores up; quick-look intent ("cerca", "veloce", "esplora"…) scores down.
+`threshold` is the score a request must reach to route (default `3`; heavy/review signals +2 each,
+long prompt +1, light signals −1, generalist agent type +1).
 
 The keyword lists and thresholds are **config-driven** — add a `routing` section to
 `config/models.json` (or point `OPENCODE_MODELS_CONFIG` elsewhere):
@@ -322,9 +333,7 @@ The keyword lists and thresholds are **config-driven** — add a `routing` secti
 }
 ```
 
-User keywords merge over the built-in defaults; invalid entries are ignored silently;
-`threshold` is the score a request must reach to route (default `3`; heavy/review signals +2 each,
-long prompt +1, light signals −1, generalist agent type +1).
+User keywords merge over the built-in defaults; invalid entries are ignored silently.
 
 ### Proactive routing skill & agent triggers
 
@@ -366,11 +375,15 @@ Routing: `delegate` accepts `account: "auto"` (default) or an explicit name. `"a
 
 ```jsonc
 "concurrency": { "maxDelegates": 8 },                 // cap simultaneous delegate jobs
-"budget": { "maxJobCostUsd": 1.50, "maxDailyCostUsd": 10.0 }   // optional limits
+"budget": {
+  "maxJobCostUsd": 1.50, "maxDailyCostUsd": 10.0,     // optional global limits
+  "accounts": { "work": { "maxDailyCostUsd": 5 } }    // optional per-account daily overrides
+}
 ```
 
 Completed delegate jobs record their real cost (summed from OpenCode assistant messages);
-`delegate` refuses work that would exceed a limit (`BUDGET_JOB_MAX` / `BUDGET_DAILY_MAX`),
+`delegate` refuses work that would exceed a limit (`BUDGET_JOB_MAX` / `BUDGET_DAILY_MAX` /
+`BUDGET_ACCOUNT_DAILY_MAX`, the last checked against the job's resolved account),
 and `models` returns a live `budget` summary. Empty `budget: {}` = no limits.
 
 ### Cleanup

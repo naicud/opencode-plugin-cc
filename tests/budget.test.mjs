@@ -98,8 +98,8 @@ describe("computeSpend", () => {
   });
 
   it("empty jobs → zeros with empty byDay", () => {
-    assert.deepEqual(computeSpend([], { now: NOW }), { total: 0, today: 0, byDay: {} });
-    assert.deepEqual(computeSpend(null, { now: NOW }), { total: 0, today: 0, byDay: {} });
+    assert.deepEqual(computeSpend([], { now: NOW }), { total: 0, today: 0, byDay: {}, byAccountToday: {} });
+    assert.deepEqual(computeSpend(null, { now: NOW }), { total: 0, today: 0, byDay: {}, byAccountToday: {} });
   });
 });
 
@@ -184,7 +184,7 @@ describe("summarizeBudget", () => {
     const s = summarizeBudget(null, []);
     assert.deepEqual(s.limits, { maxJobCostUsd: null, maxDailyCostUsd: null });
     assert.deepEqual(s.remaining, { daily: null });
-    assert.deepEqual(s.spend, { total: 0, today: 0, byDay: {} });
+    assert.deepEqual(s.spend, { total: 0, today: 0, byDay: {}, byAccountToday: {} });
   });
 
   it("remaining.daily floors at 0 when overspent", () => {

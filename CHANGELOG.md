@@ -6,6 +6,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Five quality-of-life improvements**:
+  - *Multilingual routing*: the PreToolUse classifier now scores English AND Italian delegation
+    intent (`delegate`, `subagent(s)`, `fan out`, `delega`, `subagente/i`, `in parallelo`,
+    `rifattorizza`…) up, and quick-look intent (`cerca`, `veloce`, `esplora`…) down.
+  - *Free-model auto-detection in sync*: `models:sync` prints `NEW free models detected: …`;
+    `--auto-free` promotes them straight to tier 0 (curated default never stolen).
+  - *Per-account budget caps*: `budget.accounts.<name>.maxDailyCostUsd` is enforced at delegate
+    time against that account's own daily spend (`BUDGET_ACCOUNT_DAILY_MAX`) on top of global
+    caps; `computeSpend` buckets today's spend per account.
+  - *Race winner reasoning*: `fanOut mode:"race"` now returns the winner's `reasoningTail`
+    (last ~600 chars of chain-of-thought) for cross-model quality comparison.
+  - *Persistent activity buffer*: the in-memory feed survives MCP server restarts via a
+    throttled snapshot (`state/activity-buffer.json`, 300 lines × 100 jobs), reloaded lazily.
 - **Live activity visibility — zero files by default**: every delegated session's
   chain-of-thought reasoning, assistant output, **tool-call state transitions**
   (`bash (running) {command…}`, deduped per status), permission asks and lifecycle notes are

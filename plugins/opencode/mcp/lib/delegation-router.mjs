@@ -14,9 +14,19 @@
 //   }
 // User words are MERGED over the defaults; invalid entries are ignored.
 
-const DEFAULT_HEAVY = ["build", "builds", "test", "tests", "testing", "lint", "typecheck", "tsc", "compile", "bundle", "minify", "refactor", "migrate", "migration", "benchmark", "regression"];
-const DEFAULT_REVIEW = ["review", "audit", "adversarial", "verify", "qa"];
-const DEFAULT_LIGHT = ["explore", "find", "locate", "search", "lookup", "read", "summary", "summarize", "quick", "list files"];
+const DEFAULT_HEAVY = ["build", "builds", "test", "tests", "testing", "lint", "typecheck", "tsc", "compile", "bundle", "minify", "refactor", "refactoring", "migrate", "migration", "benchmark", "regression",
+  // English delegation intent — the words a user types when they want work
+  // handed to subagents/OpenCode rather than done inline.
+  "delegate", "delegates", "delegation", "subagent", "subagents", "worker", "workers", "parallel", "parallelize", "background task", "background tasks", "fan out", "fanout",
+  // Italian equivalents (same intent, matched case-insensitively).
+  "delega", "dellega", "delegare", "subagente", "subagenti", "parallelizza", "parallelizzare", "in parallelo", "in background", "rifattorizza", "rifattorizzazione", "migrare"];
+
+const DEFAULT_REVIEW = ["review", "audit", "adversarial", "verify", "qa",
+  // Italian review/verify intent.
+  "revisione", "revisiona", "controlla", "verifica approfondita"];
+const DEFAULT_LIGHT = ["explore", "find", "locate", "search", "lookup", "read", "summary", "summarize", "quick", "list files",
+  // Italian quick-look intent — keep these LOCAL.
+  "esplora", "esplorare", "cerca", "trova", "leggi", "guarda", "veloce", "rapido", "sommario", "riassumi", "rispondi"];
 
 function escapeRegex(word) {
   return word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

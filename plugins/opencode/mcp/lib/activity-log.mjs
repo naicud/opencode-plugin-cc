@@ -13,10 +13,16 @@ import { jobLogPath, stateBase } from "../../scripts/lib/state.mjs";
 
 const MAX_LINES_PER_JOB = 300;
 const MAX_LINE_CHARS = 600;
+const MAX_PERSISTED_JOBS = 100;
+const FLUSH_INTERVAL_MS = 10_000;
 // How often a negative session→job lookup is retried (ms). Sessions get their
 // job record at delegate time; events arriving earlier must not rescan disk.
 const NEGATIVE_TTL_MS = 5000;
 const FILE_MIRROR = process.env.OPENCODE_ACTIVITY_LOG === "1";
+
+function bufferFile() {
+  return path.join(stateBase(), "activity-buffer.json");
+}
 
 function stamp() {
   return new Date().toISOString().slice(11, 23);
@@ -66,6 +72,59 @@ export function createActivitySink() {
   /** @type {Map<string, { cwd: string, jobId: string }|null>} sessionID -> target */
   const targets = new Map();
   const misses = new Map(); // sessionID -> last failed lookup ts
+  let loadedFromDisk = false;
+  let dirty = false;
+  let flushTimer = null;
+
+  // ---- persistence: survive MCP server restarts --------------------------
+  function flush() {
+    if (!dirty) return;
+    dirty = false;
+    try {
+      const jobs = {};
+      let count = 0;
+      for (const [key, arr] of buffers) {
+        if (!key.startsWith("task-") && !key.startsWith("fanout-")) continue; // job ids only
+        if (arr.length === 0) continue;
+        jobs[key] = arr.slice(-MAX_LINES_PER_JOB);
+        if (++count >= MAX_PERSISTED_JOBS) break;
+      }
+      fs.mkdirSync(stateBase(), { recursive: true });
+      const tmp = `${bufferFile()}.tmp.${process.pid}`;
+      fs.writeFileSync(tmp, JSON.stringify({ savedAt: new Date().toISOString(), jobs }));
+      fs.renameSync(tmp, bufferFile());
+    } catch {
+      // best-effort only
+    }
+  }
+
+  function scheduleFlush() {
+    dirty = true;
+    if (flushTimer) return;
+    flushTimer = setInterval(flush, FLUSH_INTERVAL_MS);
+    flushTimer.unref?.();
+  }
+
+  function loadOnce() {
+    if (loadedFromDisk) return;
+    loadedFromDisk = true;
+    try {
+      const data = JSON.parse(fs.readFileSync(bufferFile(), "utf8"));
+      for (const [jobId, lines] of Object.entries(data.jobs ?? {})) {
+        if (buffers.has(jobId)) continue;
+        const arr = Array.isArray(lines) ? lines.slice(-MAX_LINES_PER_JOB) : [];
+        buffers.set(jobId, arr);
+      }
+    } catch {
+      // first run or unreadable snapshot: start empty
+    }
+  }
+
+  process.on("exit", () => {
+    try {
+      if (dirty) flush();
+    } catch {}
+  });
 
   function resolveTarget(sessionID) {
     if (targets.has(sessionID)) return targets.get(sessionID);
@@ -91,6 +150,7 @@ export function createActivitySink() {
     }
     arr.push(line);
     if (arr.length > MAX_LINES_PER_JOB * 2) arr.splice(0, arr.length - MAX_LINES_PER_JOB);
+    scheduleFlush();
     if (FILE_MIRROR) {
       try {
         const logFile = jobLogPath(target.cwd, target.jobId);
@@ -209,11 +269,17 @@ export function createActivitySink() {
   }
 
   /**
-   * Last n buffered lines for a jobId or sessionID (this server process only).
+   * Last n buffered lines for a jobId or sessionID. Falls back to the
+   * persisted snapshot from a previous server process when the live buffer
+   * has nothing (survives MCP restarts).
    * @returns {string[]}
    */
   function tail(key, n = 80) {
-    const arr = buffers.get(key);
+    let arr = buffers.get(key);
+    if (!arr || arr.length === 0) {
+      loadOnce();
+      arr = buffers.get(key);
+    }
     if (!arr || arr.length === 0) return [];
     return arr.slice(-Math.max(1, Math.min(n, MAX_LINES_PER_JOB)));
   }
@@ -240,5 +306,5 @@ export function createActivitySink() {
       .join(" · ");
   }
 
-  return { handleEvent, note, tail, summary };
+  return { handleEvent, note, tail, summary, flush };
 }

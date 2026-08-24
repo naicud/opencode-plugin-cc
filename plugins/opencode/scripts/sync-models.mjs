@@ -179,9 +179,38 @@ export function validateConfig(config) {
   if (errors.length > 0) throw new Error(`Invalid generated models.json:\n- ${errors.join("\n- ")}`);
 }
 
+/**
+ * Detect brand-new FREE ids from this sync and (optionally) promote them to
+ * tier 0. Free = zero input AND output cost, not excluded, not already tiered.
+ * @param {object} config - PREVIOUS config (before merge), to know which ids are new
+ * @param {object} merged - POST-merge config
+ * @param {{ autoFree?: boolean }} [opts]
+ * @returns {{ promoted: string[], suggested: string[] }} promoted when autoFree
+ */
+export function detectFreeCandidates(config, merged, opts = {}) {
+  const knownIds = new Set((config.models ?? []).map((m) => m.id));
+  const promoted = [];
+  const suggested = [];
+  for (const m of merged.models ?? []) {
+    if (!knownIds.has(m.id) && m.cost?.input === 0 && m.cost?.output === 0) {
+      // A curated default must stay THE default: never steal the flag.
+      if (opts.autoFree === true) {
+        m.tier = 0;
+        m.unclassified = false;
+        if (!merged.defaults?.tier) merged.defaults = { ...(merged.defaults ?? {}), tier: 0 };
+        promoted.push(m.id);
+      } else {
+        suggested.push(m.id);
+      }
+    }
+  }
+  return { promoted, suggested };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const live = args.includes("--live");
+  const autoFree = args.includes("--auto-free");
   const configPathArgIdx = args.indexOf("--config");
   const configPath = configPathArgIdx >= 0 ? args[configPathArgIdx + 1] : CONFIG_PATH;
 
@@ -190,6 +219,7 @@ async function main() {
 
   const entries = live ? await fetchLiveCatalog(process.cwd()) : await runCli();
   const merged = mergeCatalog(current, entries);
+  const freeScan = detectFreeCandidates(current, merged, { autoFree });
   validateConfig(merged);
 
   const tmp = `${configPath}.tmp.${process.pid}`;
@@ -201,6 +231,13 @@ async function main() {
   process.stdout.write(
     `Synced ${merged.models.length} models (${unclassified} new/unclassified, ${unavailable} no longer in live catalog) -> ${configPath}\n`
   );
+  if (freeScan.promoted.length > 0) {
+    process.stdout.write(`Auto-promoted NEW free models to tier 0: ${freeScan.promoted.join(", ")}\n`);
+  } else if (freeScan.suggested.length > 0) {
+    process.stdout.write(
+      `NEW free models detected (add with: model add <id> --tier 0 --variants max --cost-in 0 --cost-out 0): ${freeScan.suggested.join(", ")}\n`
+    );
+  }
 }
 
 function runCli() {

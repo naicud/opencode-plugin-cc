@@ -23,16 +23,19 @@ export function extractAssistantCost(messages) {
 }
 
 /**
- * Aggregate spend over completed jobs, bucketed by UTC day of `createdAt`.
- * Each job's recorded `cost` (USD, captured from assistant messages at
- * completion) counts toward the total; missing/garbage costs count as 0.
- * @param {Array<{ status?: string, createdAt?: string, cost?: unknown }>|null|undefined} jobs
+ * Aggregate spend over completed jobs, bucketed by UTC day of `createdAt` and,
+ * when the job carries an `account`, per account. Each job's recorded `cost`
+ * (USD, captured from assistant messages at completion) counts toward the
+ * totals; missing/garbage costs count as 0.
+ * @param {Array<{ status?: string, createdAt?: string, cost?: unknown, account?: string|null }>|null|undefined} jobs
  * @param {{ now?: Date }} [opts] - injectable clock for tests
- * @returns {{ total: number, today: number, byDay: Record<string, number> }}
+ * @returns {{ total: number, today: number, byDay: Record<string, number>, byAccountToday: Record<string, number> }}
  */
 export function computeSpend(jobs, opts = {}) {
   const byDay = {};
+  const byAccountToday = {};
   let total = 0;
+  const todayKey = utcDay((opts.now instanceof Date ? opts.now : new Date()).toISOString());
   for (const job of Array.isArray(jobs) ? jobs : []) {
     if (job?.status !== "completed") continue;
     const key = utcDay(job.createdAt);
@@ -40,18 +43,26 @@ export function computeSpend(jobs, opts = {}) {
     const cost = finiteOrUndefined(job.cost) ?? 0;
     byDay[key] = round6((byDay[key] ?? 0) + cost);
     total += cost;
+    if (typeof job.account === "string" && job.account && key === todayKey) {
+      byAccountToday[job.account] = round6((byAccountToday[job.account] ?? 0) + cost);
+    }
   }
   const now = opts.now instanceof Date ? opts.now : new Date();
   const today = byDay[utcDay(now.toISOString())] ?? 0;
-  return { total: round6(total), today: round6(today), byDay };
+  return { total: round6(total), today: round6(today), byDay, byAccountToday };
 }
 
 /**
- * Check proposed spend against configured budget limits.
+ * Check proposed spend against configured budget limits — global limits plus
+ * optional per-account overrides:
+ *   "budget": { "maxJobCostUsd": 0.5, "maxDailyCostUsd": 5,
+ *               "accounts": { "work": { "maxDailyCostUsd": 2 } } }
+ * Per-account daily caps are checked IN ADDITION to the global cap; a job
+ * without an account only faces the global ones.
  * @param {object|null|undefined} config - parsed models.json (may be absent)
  * @param {object[]} jobs - persisted job records
- * @param {{ pendingCost?: number, now?: Date }} [opts]
- * @returns {{ ok: true } | { ok: false, code: "BUDGET_JOB_MAX"|"BUDGET_DAILY_MAX", reason: string }}
+ * @param {{ pendingCost?: number, now?: Date, account?: string|null }} [opts]
+ * @returns {{ ok: true } | { ok: false, code: "BUDGET_JOB_MAX"|"BUDGET_DAILY_MAX"|"BUDGET_ACCOUNT_DAILY_MAX", reason: string }}
  */
 export function checkBudget(config, jobs, opts = {}) {
   const budget = config?.budget;
@@ -73,6 +84,21 @@ export function checkBudget(config, jobs, opts = {}) {
         ok: false,
         code: "BUDGET_DAILY_MAX",
         reason: `today's spend $${round6(today)} + estimated $${round6(pendingCost)} would exceed maxDailyCostUsd $${maxDailyCostUsd}`,
+      };
+    }
+  }
+  // Per-account daily cap for THIS delegation's account.
+  const account = typeof opts.account === "string" && opts.account && opts.account !== "auto" ? opts.account : null;
+  const acctBudget = account ? budget.accounts?.[account] : null;
+  const acctDailyMax = finiteOrUndefined(acctBudget?.maxDailyCostUsd);
+  if (account && acctDailyMax !== undefined) {
+    const { byAccountToday } = computeSpend(jobs, { now: opts.now });
+    const spent = byAccountToday[account] ?? 0;
+    if (round6(spent + pendingCost) > acctDailyMax) {
+      return {
+        ok: false,
+        code: "BUDGET_ACCOUNT_DAILY_MAX",
+        reason: `account "${account}": today $${round6(spent)} + estimated $${round6(pendingCost)} would exceed accounts.${account}.maxDailyCostUsd $${acctDailyMax}`,
       };
     }
   }

@@ -336,8 +336,9 @@ async function toolDelegate(args) {
     }
   }
 
-  // Budget guard: refuse work that would exceed configured spend limits.
-  const verdict = checkBudget(config, jobsNow);
+  // Budget guard: refuse work that would exceed configured spend limits
+  // (global caps plus per-account daily overrides).
+  const verdict = checkBudget(config, jobsNow, { account: args.account ?? null });
   if (!verdict.ok) {
     throw Object.assign(new Error(verdict.reason), { code: verdict.code });
   }
@@ -682,6 +683,14 @@ async function toolFanOut(args, meta) {
     };
   }
 
+  // Reasoning tail of the winning run — quality comparison across race
+  // competitors needs the WHY, not just the verdict.
+  let winnerReasoningTail = "";
+  try {
+    const winConn = await getConnection(cwd, winner.account ?? null);
+    winnerReasoningTail = (winConn.watcher.reasoningText?.(winner.sessionID) ?? "").slice(-600);
+  } catch {}
+
   return {
     ...batchResult,
     mode,
@@ -692,6 +701,7 @@ async function toolFanOut(args, meta) {
       account: winner.account,
       response: winner.outcome.response ?? null,
       cost: winner.outcome.cost ?? null,
+      reasoningTail: winnerReasoningTail,
     },
     aborted,
     nextStep: `Winner session ${winner.sessionID} completed its task; verify its artifacts yourself.`,
