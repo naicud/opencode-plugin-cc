@@ -19,15 +19,15 @@
   <text x="500" y="26" text-anchor="middle" class="dim" style="font-size:12px">zsh — opencode-plugin-cc · live delegation run</text>
   <text class="ln green" style="animation-delay:0.15s" x="26" y="50.5"><tspan style="fill:#4ae168;font-weight:700">❯</tspan><tspan class="fg"> node plugins/opencode/scripts/demo-delegate.mjs</tspan></text>
   <text class="ln" style="animation-delay:0.90s" x="26" y="70"><tspan class="fg b">opencode delegation runtime</tspan><tspan class="dim"> — opencode-delegate v1.0.0</tspan></text>
-<text class="ln" style="animation-delay:1.40s" x="26" y="89.5"><tspan class="green">✓</tspan><tspan class="fg"> 10 MCP tools: </tspan><tspan class="dim">models delegate fanOut wait waitAll status respond abort shutdown doctor</tspan></text>
+<text class="ln" style="animation-delay:1.40s" x="26" y="89.5"><tspan class="green">✓</tspan><tspan class="fg"> 11 MCP tools: </tspan><tspan class="dim">models delegate fanOut wait waitAll status diff respond abort shutdown doctor</tspan></text>
 <text class="ln" style="animation-delay:1.90s" x="26" y="109"><tspan class="green">✓</tspan><tspan class="fg"> 62 models merged from live catalog — default: </tspan><tspan class="fg b">opencode/x-preview-f-free</tspan><tspan class="fg"> </tspan><tspan class="yellow">variant=max</tspan></text>
 <text class="ln" style="animation-delay:2.40s" x="26" y="128.5"><tspan class="fg">▸ delegating task…</tspan></text>
-<text class="ln" style="animation-delay:2.90s" x="26" y="148"><tspan class="green">✓</tspan><tspan class="fg"> session </tspan><tspan class="dim">ses_fcfbd80d</tspan><tspan class="fg">… → </tspan><tspan class="fg b">opencode/x-preview-f-free</tspan><tspan class="fg"> </tspan><tspan class="yellow">max</tspan><tspan class="fg"> </tspan><tspan class="dim">(default account)</tspan></text>
+<text class="ln" style="animation-delay:2.90s" x="26" y="148"><tspan class="green">✓</tspan><tspan class="fg"> session </tspan><tspan class="dim">ses_fccab77a</tspan><tspan class="fg">… → </tspan><tspan class="fg b">opencode/x-preview-f-free</tspan><tspan class="fg"> </tspan><tspan class="yellow">max</tspan><tspan class="fg"> </tspan><tspan class="dim">(default account)</tspan></text>
 <text class="ln" style="animation-delay:3.40s" x="26" y="167.5"><tspan class="fg">▸ supervising (live progress)…</tspan></text>
-<text class="ln" style="animation-delay:3.90s" x="26" y="187"><tspan class="green">✓</tspan><tspan class="fg"> completed — response: </tspan><tspan class="fg b">Fatto. `demo-artifact.txt` = `DEMO-OK` (7 byte, verificato). Report in `.oc-repo…</tspan></text>
+<text class="ln" style="animation-delay:3.90s" x="26" y="187"><tspan class="green">✓</tspan><tspan class="fg"> completed — response: </tspan><tspan class="fg b">Fatto. `demo-artifact.txt` = `DEMO-OK`, verificato in lettura. Report in `.oc-re…</tspan></text>
 <text class="ln" style="animation-delay:4.40s" x="26" y="206.5"><tspan class="green">✓</tspan><tspan class="fg"> artifact verified byte-exact · report STATUS: </tspan><tspan class="fg b">COMPLETED</tspan><tspan class="fg"> · cost: $0</tspan></text>
 <text class="ln" style="animation-delay:4.90s" x="26" y="226"><tspan class="fg">▸ clean shutdown…</tspan></text>
-<text class="ln" style="animation-delay:5.40s" x="26" y="245.5"><tspan class="green">✓</tspan><tspan class="fg"> stopped server pid(s): 4135 — zero orphan processes</tspan></text>
+<text class="ln" style="animation-delay:5.40s" x="26" y="245.5"><tspan class="green">✓</tspan><tspan class="fg"> stopped server pid(s): 4394 — zero orphan processes</tspan></text>
 <text class="ln" style="animation-delay:5.90s" x="26" y="265"><tspan class="green b">demo complete</tspan></text>
 <rect class="cursor" x="26" y="271.5" width="8" height="15" fill="#e2e2dc" opacity="0.85"/>
 </svg>

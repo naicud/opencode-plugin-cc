@@ -3,16 +3,18 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [1.13.0] - 2026-08-24
+## [1.14.0] - 2026-08-24
 
 ### Added
-- **Personas**: `delegate`/`fanOut` accept `persona: "builder" | "reviewer"`. Both agents are
-  injected server-side per spawn; the reviewer is read-only (may only write `.oc-report.md`,
-  edit permission = `ask` so its file attempts surface as pending permissions you approve/reject).
-  Invalid personas fail fast (`PERSONA_INVALID`) before any server spawn.
-- **`waitAll.waitFor: N`**: early exit as soon as N sessions reach a terminal state
-  (idle / needsInput / error); remaining sessions keep polling until the shared deadline, response
-  is marked `partial:true` (`WAIT_FOR_INVALID` on bad values).
+- **Live e2e coverage for v1.13.0 features**: reviewer-persona step (read-only flow incl
+  `needsInput` → `respond` handling and retried-session follow) and waitAll `waitFor` early-exit
+  step (partial:true assertion + straggler settle loop with byte-exact artifacts).
+- **Router security test**: hostile protocol-injection payloads in Task tool_input cannot leak
+  into hook advice (static recipe, no echo — asserted absence).
+
+### Changed
+- README: real tier-benchmark table from a live `npm run bench` run; demo.svg regenerated
+  against the current 11-tool catalog.
 
 ## [1.13.0] - 2026-08-24
 

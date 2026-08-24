@@ -374,6 +374,90 @@ async function main() {
     if (!/verify/.test(race.nextStep)) return fail(`race nextStep should say verify: ${race.nextStep}`);
     console.log(`race ok: winner=${race.winner.sessionID.slice(0, 12)}… losers aborted=${race.aborted.length}, artifact RACE-OK`);
 
+    /* 8f. persona reviewer: read-only agent may write ONLY .oc-report.md;
+           file edits it attempts surface as pending permissions we answer */
+    const rev = parseResult(await rpc("tools/call", {
+      name: "delegate",
+      arguments: {
+        cwd,
+        task: "Rivedi i file di questo workspace (e2e-proof.txt, demo-artifact.txt se presente, fan-a.txt, fan-b.txt, race-proof.txt). NON creare né modificare ALCUN file tranne .oc-report.md. Scrivi .oc-report.md con STATUS COMPLETED e la sezione Files che elenca i file esaminati.",
+        persona: "reviewer",
+        autoRetry: true,
+        title: "E2E reviewer",
+      },
+    }));
+    if (rev.persona !== "reviewer") return fail(`persona not echoed: ${JSON.stringify(rev).slice(0, 200)}`);
+    let revSession = rev.sessionID;
+    let revIdle = false;
+    let revAnswered = 0;
+    for (let hop = 0; hop < 6 && !revIdle; hop++) {
+      const w = parseResult(await rpc("tools/call", {
+        name: "wait",
+        arguments: { sessionID: revSession, cwd, timeoutSec: 150 },
+      }));
+      if (w.status === "retried") {
+        console.log(`reviewer auto-retry ok -> ${w.retryJobId}`);
+        revSession = w.newSessionID ?? revSession;
+        continue;
+      }
+      if (w.status === "needsInput") {
+        for (const perm of w.permissions ?? []) {
+          await rpc("tools/call", {
+            name: "respond",
+            arguments: { cwd, sessionID: revSession, permissionID: perm.id, response: "once" },
+          });
+          revAnswered++;
+        }
+        continue;
+      }
+      if (w.status === "idle") {
+        revIdle = true;
+        break;
+      }
+      // timeout/error: give one more round-robin pass before giving up
+    }
+    if (!revIdle) return fail(`reviewer session never went idle`);
+    if (!fs.existsSync(path.join(cwd, ".oc-report.md"))) return fail("reviewer did not produce .oc-report.md");
+    console.log(`reviewer ok: persona=reviewer answeredPermissions=${revAnswered}, report present`);
+
+    /* 8g. waitAll waitFor: early-exit once ONE of two parallel sessions is
+           terminal, then finish the straggler normally */
+    const wa1 = parseResult(await rpc("tools/call", {
+      name: "delegate",
+      arguments: { cwd, task: "Crea il file wait-proof-a.txt con contenuto ESATTAMENTE: WAIT-A-OK. Aggiorna .oc-report.md.", title: "E2E waitA" },
+    }));
+    const wa2 = parseResult(await rpc("tools/call", {
+      name: "delegate",
+      arguments: { cwd, task: "Crea il file wait-proof-b.txt con contenuto ESATTAMENTE: WAIT-B-OK. Aggiorna .oc-report.md.", title: "E2E waitB" },
+    }));
+    const wres = parseResult(await rpc("tools/call", {
+      name: "waitAll",
+      arguments: { cwd, sessionIDs: [wa1.sessionID, wa2.sessionID], waitFor: 1, timeoutSec: 240 },
+    }));
+    if (wres.waitFor !== 1 || wres.partial !== true) {
+      return fail(`waitFor echo wrong: ${JSON.stringify({ waitFor: wres.waitFor, partial: wres.partial })}`);
+    }
+    const terminalCount = (wres.results ?? []).filter((r) => ["idle", "needsInput", "error"].includes(r.status)).length;
+    if (terminalCount < 1) return fail(`waitFor returned no terminal result: ${JSON.stringify(wres.results).slice(0, 300)}`);
+    console.log(`waitFor ok: early exit with ${terminalCount}/2 terminal`);
+    // settle the straggler and verify BOTH artifacts byte-exact
+    for (const [sid, proof, want] of [[wa1.sessionID, "wait-proof-a.txt", "WAIT-A-OK"], [wa2.sessionID, "wait-proof-b.txt", "WAIT-B-OK"]]) {
+      let s = null;
+      for (let hop = 0; hop < 4; hop++) {
+        s = parseResult(await rpc("tools/call", { name: "wait", arguments: { sessionID: sid, cwd, timeoutSec: 180 } }));
+        if (s.status !== "needsInput" && s.status !== "timeout") break;
+        if (s.status === "needsInput") {
+          for (const perm of s.permissions ?? []) {
+            await rpc("tools/call", { name: "respond", arguments: { cwd, sessionID: sid, permissionID: perm.id, response: "once" } });
+          }
+        }
+      }
+      if (s?.status !== "idle") return fail(`straggler ${sid} not idle: ${JSON.stringify(s).slice(0, 200)}`);
+      const got = fs.readFileSync(path.join(cwd, proof), "utf8").trim();
+      if (got !== want) return fail(`${proof} content wrong: ${got}`);
+    }
+    console.log("stragglers ok: WAIT-A-OK + WAIT-B-OK byte-exact after early exit");
+
     /* 9. clean shutdown: kill the plugin-spawned server, verify port freed */
     const sd = parseResult(await rpc("tools/call", {
       name: "shutdown",
@@ -412,7 +496,7 @@ async function main() {
     if (df.isRepo !== false) return fail(`diff isRepo expected false: ${JSON.stringify(df).slice(0, 200)}`);
     if (!/not a git repository/.test(df.note ?? "")) return fail(`diff note missing: ${df.note}`);
 
-    console.log("\nE2E PASS: full stdio flow verified (handshake, catalog, max-effort delegation, artifacts, report contract, abort, resume, doctor, fanOut+waitAll cross-workspace, race mode, diff, clean shutdown).");
+    console.log("\nE2E PASS: full stdio flow verified (handshake, catalog, max-effort delegation, artifacts, report contract, abort, resume, doctor, fanOut+waitAll cross-workspace, race mode, reviewer persona, waitFor early-exit, diff, clean shutdown).");
   } catch (err) {
     fail(err.message);
   } finally {

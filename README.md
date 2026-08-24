@@ -198,7 +198,7 @@ Reasoning-effort variants (`high`/`max`) bill reasoning tokens as **output** tok
 ### Testing
 
 ```bash
-npm test            # unit suite (289 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, escalation, job control, clean shutdown, agent injection, race validation, progress streaming, workspace diff + cwd validation, personas + routing
+npm test            # unit suite (290 tests): catalog merge, resolve, JSON-RPC, permissions/SSE, delegation hook, accounts, escalation, job control, clean shutdown, agent injection, race validation, progress streaming, workspace diff + cwd validation, personas + routing
 npm run test:e2e    # full delegation round-trip against a real opencode server (needs auth)
 npm run test:stress # permission ask/deny, concurrency, server kill+restart recovery (needs auth)
 npm run test:multiaccount # round-robin rotation across two named credentials, per-account isolation, state persistence (needs auth)
@@ -207,6 +207,20 @@ npm run models:sync [-- --live]   # refresh config/models.json from the live cat
 npm run demo        # re-run the live delegation demo and regenerate docs/demo.svg
 npm run bench       # benchmark curated tiers: same micro-task per tier, markdown table (wall time, cost, verdict)
 ```
+
+### Tier benchmark (real run)
+
+`npm run bench` delegates the same micro-task once per tier and prints a markdown table. Latest
+run on this machine (config in free-only mode — paid tiers report `excluded` without burning
+calls):
+
+| tier | model | variant applied | wall s | cost USD | verdict |
+|---|---|---|---|---|---|
+| 0 | x-preview-f-free | max | 30.3 | 0.000000 | ok |
+| 1 | deepseek-v4-flash | – | 0.0 | n/a | excluded |
+| 2 | deepseek-v4-pro | – | 0.0 | n/a | excluded |
+
+Re-enable paid tiers in `config/models.json` (`/opencode:model`) to benchmark them for real.
 
 ### Automated catalog sync
 
