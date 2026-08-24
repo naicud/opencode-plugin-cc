@@ -30,6 +30,17 @@ import { checkBudget, summarizeBudget } from "./lib/budget.mjs";
 import { runDiagnostics, formatDoctorReport } from "../scripts/lib/doctor.mjs";
 import { createJobRecord } from "../scripts/lib/tracked-jobs.mjs";
 import { loadState, upsertJob, stateBase, generateJobId } from "../scripts/lib/state.mjs";
+import { getGitRoot } from "../scripts/lib/git.mjs";
+
+/**
+ * Default workspace for tools called without an explicit cwd.
+ * Anchored ONCE at startup: the git root of the directory Claude Code launched
+ * the MCP server from (falling back to that directory). This mirrors the
+ * companion's resolveWorkspace() rule, so artifacts, job records and server
+ * ports always land in the user's project — never in some random host cwd.
+ * Exported for tests.
+ */
+export const DEFAULT_CWD = (await getGitRoot(process.cwd())) ?? process.cwd();
 
 const PROTOCOL_VERSION = "2024-11-05";
 const WAIT_POLL_INTERVAL_MS = 5000;
@@ -105,7 +116,7 @@ function shortId(sessionID) {
  * @returns {string}
  */
 function resolveCwd(args) {
-  const cwd = args?.cwd ?? process.cwd();
+  const cwd = args?.cwd ?? DEFAULT_CWD;
   if (typeof cwd !== "string" || !cwd.trim()) {
     throw Object.assign(new Error('cwd must be a non-empty string'), { code: "CWD_INVALID" });
   }
@@ -212,7 +223,7 @@ function accountForSession(cwd, sessionID) {
 
 async function toolModels(args) {
   const config = loadConfig();
-  const { client } = await getConnection(args.cwd ?? process.cwd());
+  const { client } = await getConnection(args.cwd ?? DEFAULT_CWD);
   const catalog = await getCatalog(client);
   return {
     provider: config.provider,
@@ -227,7 +238,7 @@ async function toolModels(args) {
     offPeakWindowsUtc: ["01:00-04:00", "06:00-10:00"],
     hint: formatHint(config, catalog.models),
     costTable: formatCostTable(catalog.models),
-    budget: summarizeBudget(config, loadState(args.cwd ?? process.cwd()).jobs ?? []),
+    budget: summarizeBudget(config, loadState(args.cwd ?? DEFAULT_CWD).jobs ?? []),
   };
 }
 

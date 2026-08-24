@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.11.1] - 2026-08-24
+
+### Fixed
+- **Default workspace anchoring**: MCP tools called without `cwd` now resolve against
+  `DEFAULT_CWD` — the git root of the directory Claude Code launched the server from —
+  instead of the raw host process cwd. Job records, spawned-server ports and permission
+  watchers can no longer land in an unrelated directory; artifacts always inherit the
+  user's project root (same rule as the companion's `resolveWorkspace()`).
+
 ## [1.11.0] - 2026-08-24
 
 ### Added

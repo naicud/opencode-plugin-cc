@@ -261,3 +261,11 @@ test("findJobRecord falls back to cross-workspace state scan", () => {
   assert.equal(miss.job, null);
   assert.equal(miss.jobCwd, primary);
 });
+
+test("DEFAULT_CWD is an absolute directory anchored at startup", async () => {
+  const { DEFAULT_CWD } = await import("../plugins/opencode/mcp/server.mjs");
+  assert.equal(typeof DEFAULT_CWD, "string");
+  assert.ok(path.isAbsolute(DEFAULT_CWD), `default cwd must be absolute: ${DEFAULT_CWD}`);
+  const stat = fs.statSync(DEFAULT_CWD);
+  assert.ok(stat.isDirectory(), "default cwd must exist and be a directory");
+});
