@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "naicud-opencode-plugin-cc",
-  "version": "1.15.1",
+  "version": "1.16.0",
   "description": "OpenCode plugins to use in Claude Code for delegation and code review.",
   "owner": {
     "name": "naicud"
@@ -10,13 +10,20 @@
     {
       "name": "opencode",
       "description": "Use OpenCode from Claude Code to review code or delegate tasks.",
-      "version": "1.15.1",
+      "version": "1.16.0",
       "author": {
         "name": "naicud"
       },
       "source": "./plugins/opencode",
       "category": "development",
-      "keywords": ["opencode", "delegate", "mcp", "code-review", "multi-agent", "model-catalog"]
+      "keywords": [
+        "opencode",
+        "delegate",
+        "mcp",
+        "code-review",
+        "multi-agent",
+        "model-catalog"
+      ]
     }
   ]
 }
