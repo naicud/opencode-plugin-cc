@@ -14,7 +14,7 @@ Decide WHEN work should leave this thread, then hand it off correctly.
 - Heavy implementation: multi-file refactors, migrations, large test suites, builds with long verification loops.
 - Reviews/audits that benefit from an isolated reviewer persona (`persona: "reviewer"`).
 - Several independent chunks of work at once → `fanOut` (up to 12) + `waitAll`.
-- The task needs its own workspace blast-radius isolation → use the `opencode-delegate` agent (isolation: worktree).
+- The task needs its own workspace blast-radius isolation → scope it explicitly in the task text (files in/out of scope); the subagent itself runs in the caller's directory, no worktree isolation.
 
 ## Keep on the main thread (do NOT delegate)
 
