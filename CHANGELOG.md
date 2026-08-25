@@ -3,6 +3,21 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.20.0] - 2026-08-25
+
+### Added
+- **Skill support across the delegation boundary**: spawned OpenCode workers now receive plugin
+  skills the same way Claude Code injects an agent's frontmatter `skills:` into its subagents.
+  Spawn-time: selected skill digests are baked into the injected `oc-delegate` agent prompt
+  (default: `opencode-prompting`; `oc-reviewer` ships none — its report format is fully pinned by
+  the contract). Per-call: `delegate`/`fanOut` accept `skills: string[]` (subset of the five
+  plugin skills, max 3, deduplicated, validated before any server spawn with `SKILL_INVALID` /
+  `SKILL_TOO_MANY`); digests are appended to the task prompt under a `[PLUGIN SKILLS]` marker,
+  so guidance also reaches sessions running under the stock `build` fallback. Selected skills
+  are recorded on job records and echoed in tool responses. New module `mcp/lib/skills.mjs`
+  loads SKILL.md bodies (frontmatter stripped, mtime-cached); unreadable skill files degrade
+  inline instead of failing the delegation.
+
 ## [1.19.0] - 2026-08-25
 
 ### Added

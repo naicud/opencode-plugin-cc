@@ -7,6 +7,8 @@
 //   - oc-delegate  ("builder"): full task executor, may edit files
 //   - oc-reviewer  ("reviewer"): read-only reviewer, may ONLY write .oc-report.md
 
+import { DEFAULT_BUILDER_SKILLS, DEFAULT_REVIEWER_SKILLS, renderSkillDigest } from "./skills.mjs";
+
 const AGENT_NAME = "oc-delegate";
 const REVIEWER_AGENT_NAME = "oc-reviewer";
 
@@ -27,17 +29,27 @@ function header(kind, contractText) {
 
 /**
  * Build the config fragment defining the plugin's agents.
+ * Selected plugin skills are baked into the prompts (spawn-time skill
+ * injection — the OpenCode-side counterpart of Claude Code's agent
+ * frontmatter `skills:`).
  * @param {string} contractText - rendered work contract (config.models.json `contract`, ${cwd} resolved)
+ * @param {{ builderSkills?: string[], reviewerSkills?: string[] }} [opts]
  * @returns {{ agent: Record<string, object> }} config fragment for OPENCODE_CONFIG_CONTENT
  */
-export function buildAgentConfigContent(contractText) {
+export function buildAgentConfigContent(
+  contractText,
+  { builderSkills = DEFAULT_BUILDER_SKILLS, reviewerSkills = DEFAULT_REVIEWER_SKILLS } = {}
+) {
   const builderPrompt = [
     header("task", contractText),
     "",
     "Additional hard rules:",
     "- Never push, commit, or modify anything outside the stated workspace.",
     "- Finish only after the verification command in the task succeeds.",
-  ].join("\n");
+    renderSkillDigest(builderSkills, { label: "PLUGIN SKILLS" }),
+  ]
+    .filter((section) => section !== "")
+    .join("\n");
 
   const reviewerPrompt = [
     header("code review", contractText),
@@ -46,7 +58,10 @@ export function buildAgentConfigContent(contractText) {
     "- READ-ONLY review: do NOT modify, create, or delete any project file.",
     "- The ONLY file you may write is .oc-report.md (findings + STATUS line).",
     "- Never push or commit.",
-  ].join("\n");
+    renderSkillDigest(reviewerSkills, { label: "PLUGIN SKILLS" }),
+  ]
+    .filter((section) => section !== "")
+    .join("\n");
 
   return {
     agent: {

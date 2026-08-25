@@ -25,6 +25,7 @@ import { createPermissionWatcher } from "./lib/permissions.mjs";
 import { snapshotGitHead, diffSinceSnapshot } from "./lib/workspace-diff.mjs";
 import { pickAccount, buildAuthContent, envKeyName, listAccounts } from "./lib/accounts.mjs";
 import { buildAgentConfigContent, validateAgentConfigContent, AGENT_NAME, PERSONAS } from "./lib/agent.mjs";
+import { SKILL_NAMES, resolveSkillNames, renderSkillDigest } from "./lib/skills.mjs";
 import { buildEscalation } from "./lib/escalation.mjs";
 import { checkBudget, summarizeBudget } from "./lib/budget.mjs";
 import { runDiagnostics, formatDoctorReport } from "../scripts/lib/doctor.mjs";
@@ -413,6 +414,9 @@ async function toolDelegate(args) {
       { code: "PERSONA_INVALID" }
     );
   }
+  // Per-call skill injection (validated BEFORE any connection work so invalid
+  // args never spawn a server).
+  const skills = resolveSkillNames(args.skills, { label: 'delegate: "skills"' });
 
   const jobsNow = loadState(cwd).jobs ?? [];
 
@@ -483,8 +487,10 @@ async function toolDelegate(args) {
   // The job id exists before the prompt so the contract can pin a per-job
   // report path (no shared-file races between concurrent delegates).
   const jobId = generateJobId("delegate");
+  const skillsDigest = renderSkillDigest(skills);
   const promptText =
     `${renderContract(config.contract, cwd, jobId)}\n---\n\n${args.task}\n\n` +
+    (skillsDigest ? `${skillsDigest}\n\n` : "") +
     `[REPORT] Percorso obbligatorio del report finale per QUESTO job: ${reportPathFor(cwd, jobId)} — scrivilo ESATTAMENTE lì (sovrascrive ogni altra indicazione sul percorso del report).`;
 
   await client.sendPromptAsync(sessionID, promptText, {
@@ -506,6 +512,7 @@ async function toolDelegate(args) {
     task: args.task,
     autoRetry,
     persona,
+    ...(skills.length > 0 ? { skills } : {}),
     ...(resumedFrom ? { resumedFrom } : {}),
     ...(retryTarget
       ? { retryOf: retryTarget.id, retryOfSession: retryTarget.sessionID ?? null }
@@ -534,6 +541,7 @@ async function toolDelegate(args) {
     source: selection.source,
     agent,
     persona,
+    ...(skills.length > 0 ? { skills } : {}),
     ...(agentInjected === false ? { agentNote: `server does not expose "${AGENT_NAME}" agent; ran under stock "build" (contract still prepended to the prompt)` } : {}),
     ...(resumedFrom ? { resumedFrom } : {}),
     ...(retryTarget ? { retryOf: retryTarget.id } : {}),
@@ -634,6 +642,10 @@ async function toolFanOut(args, meta) {
       { code: "PERSONA_INVALID" }
     );
   }
+  // Per-call skill injection, shared by every task in the batch (validated
+  // BEFORE any connection work).
+  const fanSkills = resolveSkillNames(args.skills, { label: 'fanOut: "skills"' });
+  const fanSkillsDigest = renderSkillDigest(fanSkills);
   const catalogModels = (await getCatalog(await getClient(cwd, firstAccount))).models;
   const selection = resolveSelection(
     { modelId: args.model, tier: args.tier, effort: args.effort },
@@ -676,6 +688,7 @@ async function toolFanOut(args, meta) {
       await client.sendPromptAsync(
         session.id,
         `${renderContract(config.contract, taskCwd, jobId)}\n---\n\n${task}\n\n` +
+          (fanSkillsDigest ? `${fanSkillsDigest}\n\n` : "") +
           `[REPORT] Percorso obbligatorio del report finale per QUESTO job: ${reportPathFor(taskCwd, jobId)} — scrivilo ESATTAMENTE lì (sovrascrive ogni altra indicazione sul percorso del report).`,
         {
           agent,
@@ -695,6 +708,8 @@ async function toolFanOut(args, meta) {
         gitBase: snapshotGitHead(taskCwd),
         task,
         autoRetry: false,
+        persona: fanPersona,
+        ...(fanSkills.length > 0 ? { skills: fanSkills } : {}),
         fanOutId,
         fanOutIndex: i,
       });
@@ -721,6 +736,7 @@ async function toolFanOut(args, meta) {
     modelRef: `${selection.model.provider ?? config.provider}/${selection.model.id}`,
     variant: selection.variant ?? null,
     effortApplied: selection.effortApplied,
+    ...(fanSkills.length > 0 ? { skills: fanSkills } : {}),
   };
 
   if (mode !== "race") {
@@ -1821,6 +1837,7 @@ const TOOLS = [
         account: { type: "string", description: 'OpenCode account for quota routing ("auto" default round-robin)' },
         agent: { type: "string", description: "OpenCode agent (default build)" },
         persona: { type: "string", enum: ["builder", "reviewer"], description: "builder (default): oc-delegate agent, may edit files. reviewer: read-only oc-reviewer agent that may only write .oc-report.md" },
+        skills: { type: "array", items: { type: "string", enum: SKILL_NAMES }, maxItems: 3, description: "Plugin skill digests injected into the worker prompt (task-shaping/report conventions); use when the task needs extra guidance beyond the baked defaults" },
         retryOf: { type: "string", description: "Job id or id prefix of a failed/cancelled delegate job this run retries" },
         resumeSessionID: { type: "string", description: "Existing opencode session id to continue (crash recovery / multi-step) instead of creating a new session" },
         title: { type: "string", description: "Optional session title override (default: first 80 chars of task)" },
@@ -1848,6 +1865,7 @@ const TOOLS = [
         account: { type: "string", description: 'OpenCode account for quota routing ("auto" default round-robin)' },
         agent: { type: "string", description: "OpenCode agent (default oc-delegate when injected, else build)" },
         persona: { type: "string", enum: ["builder", "reviewer"], description: "Agent persona for every task in the batch (default builder)" },
+        skills: { type: "array", items: { type: "string", enum: SKILL_NAMES }, maxItems: 3, description: "Plugin skill digests injected into every worker prompt in the batch (task-shaping/report conventions)" },
         titlePrefix: { type: "string", description: "Session title prefix (default Fanout)" },
       },
     },
