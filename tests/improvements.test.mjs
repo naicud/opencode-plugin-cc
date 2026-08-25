@@ -157,13 +157,20 @@ describe("activity buffer persistence across restarts", () => {
 });
 
 describe("wait auto-slice", () => {
-  it("slices to 60s when no timeoutSec/progressToken, 600s with token", async () => {
+  it("caps waits at one slice without a progressToken, honors explicit timeout with one", async () => {
     const { effectiveWaitTimeoutSec } = await import("../plugins/opencode/mcp/server.mjs");
     assert.equal(effectiveWaitTimeoutSec({}, {}), 60);
-    assert.equal(effectiveWaitTimeoutSec({ timeoutSec: 300 }, {}), 300);
+    // No token → explicit long timeouts are capped at the slice so the call
+    // never blocks past Claude Code's ~2min auto-background threshold.
+    assert.equal(effectiveWaitTimeoutSec({ timeoutSec: 300 }, {}), 60);
+    // Short explicit timeouts stay exact.
+    assert.equal(effectiveWaitTimeoutSec({ timeoutSec: 30 }, {}), 30);
+    // Token → live progress frames make long blocks fine.
     assert.equal(effectiveWaitTimeoutSec({}, { progressToken: "t" }), 600);
+    assert.equal(effectiveWaitTimeoutSec({ timeoutSec: 300 }, { progressToken: "t" }), 300);
     process.env.OPENCODE_WAIT_SLICE_SEC = "1";
     assert.equal(effectiveWaitTimeoutSec({}, {}), 1);
+    assert.equal(effectiveWaitTimeoutSec({ timeoutSec: 300 }, {}), 1);
     delete process.env.OPENCODE_WAIT_SLICE_SEC;
   });
 });

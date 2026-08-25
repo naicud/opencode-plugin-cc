@@ -324,10 +324,17 @@ async function main() {
     if (!fan.fanOutId?.startsWith("fanout-")) return fail(`fanOutId malformed: ${fan.fanOutId}`);
     if (new Set(fan.jobs.map((j) => j.sessionID)).size !== 2) return fail("fanOut sessions not distinct");
     if (!/waitAll/.test(fan.nextStep)) return fail("fanOut nextStep missing waitAll guidance");
-    const fanWait = parseResult(await rpc("tools/call", {
-      name: "waitAll",
-      arguments: { sessionIDs: fan.jobs.map((j) => j.sessionID), cwd, timeoutSec: 180 },
-    }));
+    // Slice-capped supervision: each pass returns within ~60s with fresh
+    // per-session snapshots; chain passes until both jobs report idle.
+    let fanWait;
+    for (let pass = 0; pass < 4; pass++) {
+      fanWait = parseResult(await rpc("tools/call", {
+        name: "waitAll",
+        arguments: { sessionIDs: fan.jobs.map((j) => j.sessionID), cwd, timeoutSec: 180 },
+      }));
+      if ((fanWait.summary?.idle ?? 0) === 2) break;
+      console.log(`fanOut waitAll pass ${pass + 1}: ${JSON.stringify(fanWait.summary)}`);
+    }
     if ((fanWait.summary?.idle ?? 0) !== 2) return fail(`waitAll after fanOut: ${JSON.stringify(fanWait.summary)}`);
     for (const [dirPath, name, expected] of [
       [cwd, "fan-a.txt", "FAN-A-OK"],

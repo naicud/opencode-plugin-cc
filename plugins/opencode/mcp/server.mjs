@@ -901,25 +901,33 @@ export function findJobRecord(cwd, sessionID) {
 }
 
 /**
- * Effective wait duration. When the caller pins timeoutSec (or supplies a
- * progressToken) behavior is unchanged: one long blocking poll. Otherwise the
- * call auto-slices to WAIT_SLICE_SEC so Claude Code sees a fresh activity
- * snapshot (assistant tail, reasoning, tool calls) every slice instead of a
- * mute block that eventually gets backgrounded — classic-subagent feel with
- * zero manual `logs` calls.
+ * Effective wait duration. With a progressToken the caller gets live MCP
+ * progress frames, so a long blocking poll is fine: explicit timeoutSec wins,
+ * otherwise the 600s default. WITHOUT a progressToken nothing would stream to
+ * the UI, and any call blocking past ~2 minutes is auto-backgrounded by
+ * Claude Code (invisible + mute). So the wait is hard-capped at one activity
+ * slice (WAIT_SLICE_SEC, env-overridable): every call returns a fresh
+ * snapshot (assistant tail, reasoning, tool calls, todos) plus nextStep, and
+ * the supervisor chains calls until idle — classic-subagent feel with zero
+ * manual `logs` calls.
  */
 export function effectiveWaitTimeoutSec(args = {}, meta = {}) {
-  if (Number.isFinite(args.timeoutSec)) return Math.max(1, args.timeoutSec);
-  if (meta?.progressToken) return DEFAULT_WAIT_TIMEOUT_SEC;
+  if (meta?.progressToken) {
+    return Number.isFinite(args.timeoutSec) ? Math.max(1, args.timeoutSec) : DEFAULT_WAIT_TIMEOUT_SEC;
+  }
   const envSlice = Number.parseInt(process.env.OPENCODE_WAIT_SLICE_SEC ?? "", 10);
-  return Number.isFinite(envSlice) && envSlice > 0 ? envSlice : WAIT_SLICE_SEC;
+  const slice = Number.isFinite(envSlice) && envSlice > 0 ? envSlice : WAIT_SLICE_SEC;
+  return Math.min(Number.isFinite(args.timeoutSec) ? Math.max(1, args.timeoutSec) : slice, slice);
 }
 
 async function toolWait(args, meta) {
   const cwd = resolveCwd(args);
   const account = accountForSession(cwd, args.sessionID);
   const { client, watcher } = await getConnection(cwd, account);
-  const autoSliced = !Number.isFinite(args.timeoutSec) && !meta?.progressToken;
+  // Without a progressToken the wait is always slice-capped (see
+  // effectiveWaitTimeoutSec): mark the result so the supervisor knows it got
+  // a periodic snapshot, not a terminal outcome.
+  const autoSliced = !meta?.progressToken;
   const timeoutSec = effectiveWaitTimeoutSec(args, meta);
   const emit = buildProgressEmitter(meta, { totalSec: timeoutSec });
   const deadline = Date.now() + timeoutSec * 1000;
@@ -1410,25 +1418,45 @@ async function toolWaitAll(args, meta) {
     );
   }
   if (waitFor == null) {
+    // Without a progressToken nothing streams to Claude Code's UI and any
+    // call blocked past ~2 minutes is auto-backgrounded (mute + invisible).
+    // Cap the whole batch pass at ONE activity slice so every callAll returns
+    // fresh per-session snapshots; the supervisor chains calls until done.
+    const sliceCap = meta?.progressToken ? null : effectiveWaitTimeoutSec({}, meta);
+    const capTimeout =
+      sliceCap != null && (!Number.isFinite(args.timeoutSec) || args.timeoutSec > sliceCap);
     const results = await Promise.all(
       ids.map((sessionID) =>
-        toolWait({ ...args, sessionID }, meta).catch((err) => ({
+        toolWait(
+          { ...args, sessionID, ...(capTimeout ? { timeoutSec: sliceCap } : {}) },
+          meta
+        ).catch((err) => ({
           status: "error",
           sessionID,
           error: err?.message ?? String(err),
         }))
       )
     );
+    const summary = {
+      total: results.length,
+      idle: results.filter((r) => r.status === "idle").length,
+      needsInput: results.filter((r) => r.status === "needsInput").length,
+      timeout: results.filter((r) => r.status === "timeout").length,
+      error: results.filter((r) => r.status === "error").length,
+    };
     return {
       sessionIDs: ids,
       results,
-      summary: {
-        total: results.length,
-        idle: results.filter((r) => r.status === "idle").length,
-        needsInput: results.filter((r) => r.status === "needsInput").length,
-        timeout: results.filter((r) => r.status === "timeout").length,
-        error: results.filter((r) => r.status === "error").length,
-      },
+      summary,
+      // Long-horizon guarantee: a timeout entry means THIS call's slice
+      // expired while that session is still executing server-side.
+      // Nothing was cancelled — keep supervising; abort only on explicit request.
+      ...(summary.timeout > 0
+        ? {
+            sliced: true,
+            note: `${summary.timeout} session(s) still running past this call's slice deadline — nothing was cancelled. Re-issue waitAll (or wait per sessionID) until they report idle; kill only if the user explicitly asks.`,
+          }
+        : {}),
     };
   }
 
@@ -1828,7 +1856,7 @@ const TOOLS = [
     name: "wait",
     title: "Wait for session",
     description:
-      "Poll a delegated session until it goes idle, needs input, or the timeout expires. WITHOUT an explicit timeoutSec the call auto-slices (60s): each slice returns a fresh activity snapshot (assistant tail, reasoning, tool calls) plus nextStep — call wait again until idle for a live subagent-style feed.",
+      "Poll a delegated session until it goes idle, needs input, or the timeout expires. Each call returns within one 60s activity slice (assistant tail, reasoning, tool calls, todos) plus nextStep — chain wait calls until idle for a live subagent-style feed. With a _meta.progressToken the wait blocks (default 600s) and streams MCP progress frames instead.",
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
@@ -1836,7 +1864,7 @@ const TOOLS = [
       properties: {
         sessionID: { type: "string" },
         cwd: { type: "string", description: "Workspace directory" },
-        timeoutSec: { type: "number", description: "Default 600 when a progressToken is supplied; otherwise auto-slices every 60s" },
+        timeoutSec: { type: "number", description: "Without a progressToken: capped at the 60s slice (each call returns an activity snapshot). With a progressToken: honored as-is (default 600)" },
       },
     },
   },
@@ -1844,7 +1872,7 @@ const TOOLS = [
     name: "waitAll",
     title: "Wait for sessions",
     description:
-      "Wait for MULTIPLE delegated sessions in parallel until each goes idle, needs input, or the shared timeout expires. Returns per-session outcomes plus counts. Optional waitFor:N returns early as soon as N sessions reach a terminal state (idle/needsInput/error).",
+      "Wait for MULTIPLE delegated sessions in parallel until each goes idle, needs input, or the timeout expires. Returns per-session outcomes plus counts. Each call returns within one 60s slice (per-session progress snapshots) — re-issue until all report idle. Optional waitFor:N returns early as soon as N sessions reach a terminal state (idle/needsInput/error). With a _meta.progressToken the call blocks (default 600s) and streams MCP progress frames instead.",
     annotations: { readOnlyHint: true },
     inputSchema: {
       type: "object",
@@ -1852,7 +1880,7 @@ const TOOLS = [
       properties: {
         sessionIDs: { type: "array", items: { type: "string" }, description: "Up to 12 session ids" },
         cwd: { type: "string", description: "Workspace directory" },
-        timeoutSec: { type: "number", description: "Default 600 (shared deadline)" },
+        timeoutSec: { type: "number", description: "Without a progressToken: capped at the 60s slice. With a progressToken: shared deadline (default 600)" },
         waitFor: {
           type: "integer",
           description:

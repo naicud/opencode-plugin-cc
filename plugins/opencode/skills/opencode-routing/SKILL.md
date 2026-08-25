@@ -1,6 +1,6 @@
 ---
 name: opencode-routing
-description: Use PROACTIVELY when the user asks for subagents, delegation, parallel workers, background tasks or fan-out work — routes heavy work to OpenCode via the opencode-delegate agent or the mcp__plugin_opencode_oc__delegate/fanOut tools. Do NOT route routine single-file edits, quick questions, exploration or anything you can finish in a couple of steps.
+description: Use when the user EXPLICITLY asks for subagents, delegation, OpenCode workers, parallel workers, background tasks or fan-out work — routes heavy work to OpenCode via the opencode-delegate agent or the mcp__plugin_opencode_oc__delegate/fanOut tools. NEVER route proactively on your own judgment; do NOT route routine single-file edits, quick questions, exploration or anything you can finish in a couple of steps.
 user-invocable: true
 ---
 

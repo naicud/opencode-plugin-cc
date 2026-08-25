@@ -365,23 +365,48 @@ User keywords merge over the built-in defaults; invalid entries are ignored sile
 
 ### Proactive routing skill & agent triggers
 
-Delegation should fire when the USER asks for it — not on every task. Two system-prompt-level
+Delegation fires ONLY when the USER asks for it — never on its own. Two system-prompt-level
 signals make that match happen before any hook runs:
 
 - **`skills/opencode-routing/SKILL.md`** — trigger-rich description ("subagents, delegation,
-  parallel workers, background tasks, fan-out") plus an explicit guard: routine single-file edits,
-  exploration and quick questions stay on the main thread. When in doubt, don't delegate.
-- **Agent descriptions** (`agents/opencode-delegate.md`) carry the same proactive triggers and the
-  same exclusions, so Claude Code's subagent matcher picks `opencode-delegate` for "manda un
-  subagente"-style asks instead of a built-in generalist.
+  parallel workers, background tasks, fan-out") with an explicit-only guard: it activates when
+  the user asks for delegation, and routine single-file edits, exploration and quick questions
+  stay on the main thread. When in doubt, don't delegate.
+- **Agent descriptions** (`agents/opencode-delegate.md`) carry the same explicit-only triggers
+  ("Use ONLY when the user EXPLICITLY asks…never start it proactively"), so Claude Code's
+  subagent matcher picks `opencode-delegate` for "manda un subagente"-style asks instead of a
+  built-in generalist — and keeps quiet otherwise.
 
 The PreToolUse router hook remains the second line of defense: it only advises at the moment a
 `Task` call is already being spawned, and its recipe now follows the free-tier policy (no hardcoded
 tier).
 
+### Using the `opencode-delegate` subagent (explicit ask)
+
+`opencode-delegate` is a real Claude Code subagent (Task tool) that supervises OpenCode without
+burning your main thread. It runs on haiku with a 12-turn budget and NEVER writes code itself:
+it shapes the task, picks the model, runs the `delegate`/`wait` loop and verifies `.oc-report.md`.
+
+Ask for it explicitly:
+
+- natural language: *"usa l'agente opencode-delegate per rifattorizzare X"* / *"use the
+  opencode-delegate subagent to fix the flaky tests in src/auth"*
+- slash command: `/opencode:delegate <task>` (same supervision loop from the main thread)
+- direct Task call: `subagent_type: opencode-delegate`
+
+What you see while it runs: each `wait` returns within one 60s slice carrying an activity
+snapshot (assistant tail, reasoning tail, recent tool calls, todo counts), and the
+PostToolUse hook re-injects it as context — a subagent-style transcript in your conversation,
+without Claude ever backgrounding the call. Token cost on the Claude side stays flat (~400-450
+tokens per slice): all heavy lifting (code edits, test runs, report writing) happens inside
+OpenCode on OpenCode's quota; Claude only supervises and verifies.
+
+Long-horizon rule enforced by the agent: a `timeout` slice means the session is STILL RUNNING
+server-side — chain more waits until idle, and `abort` only when you explicitly ask to kill it.
+
 ### Delegation notifications hook
 
-A PostToolUse hook (`scripts/delegation-context-hook.mjs`) watches `wait`/`waitAll`/`status` MCP calls and injects an `additionalContext` note into Claude's context when a delegated task finishes, blocks on a pending permission (`needsInput`), or times out — so the supervisor notices without polling manually.
+A PostToolUse hook (`scripts/delegation-context-hook.mjs`) watches `wait`/`waitAll`/`status` MCP calls and injects an `additionalContext` note into Claude's context when a delegated task finishes, blocks on a pending permission (`needsInput`), or times out — so the supervisor notices without polling manually. On a timeout slice the note carries the live activity feed: assistant tail, reasoning tail, the last tool calls and todo progress.
 
 When a task ends with a retryable assistant error (quota exhausted, rate limit, provider 5xx), `wait` attaches an `escalation` object (`kind`, `suggestModel`, `suggestVariant`) pointing at the next configured tier, and the hook tells Claude exactly how to re-delegate — no guessing, no silent failure.
 

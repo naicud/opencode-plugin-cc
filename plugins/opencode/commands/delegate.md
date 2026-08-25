@@ -20,7 +20,7 @@ Procedure:
 
 1. Call `models` with `{cwd}` to see tiers and budget. If no flag picked a model: default tier 0 (x-preview-f-free, free); hard refactor = tier 2 (deepseek-v4-pro); hardest problems = tier 3 (kimi-k3). Effort is ALWAYS max.
 2. Call `delegate` with `{task: <stripped task text>, cwd, ...flags}`. If `--retry` or `--resume` given, map them to `retryOf` / `resumeSessionID`. If `--auto-retry` given, map it to `autoRetry: true`.
-3. Call `wait` with `{sessionID, cwd, timeoutSec: 600}` in a loop until it returns idle or needsInput.
+3. Call `wait` with `{sessionID, cwd}` in a loop until it returns idle or needsInput. Each call returns within one 60s slice carrying a fresh activity snapshot (assistant tail, reasoning, recent tool calls, todos) — chain the calls without an explicit timeoutSec so progress streams into the conversation like a subagent transcript.
 4. On `needsInput`, decide each permission: approve read-only/test commands with `respond {response:"once"}`; reject anything matching git push/commit, rm -rf, sudo, or curl piped to shell, then report blocked.
 5. Verify per the delegation contract: read `.oc-report.md`, check the listed files exist, re-run read-only verification commands if given.
 6. Report STATUS (your judgment), changed files, verification performed, model used and effortApplied.

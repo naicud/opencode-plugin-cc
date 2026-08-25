@@ -81,6 +81,12 @@ function contextFor(payload) {
     if (progress?.tail) {
       parts.push(`Latest assistant output tail:\n${progress.tail}`);
     }
+    if (progress?.reasoningTail) {
+      parts.push(`Reasoning tail:\n${progress.reasoningTail}`);
+    }
+    if (Array.isArray(progress?.tools) && progress.tools.length > 0) {
+      parts.push(`Recent tool calls:\n${progress.tools.join("\n")}`);
+    }
     if (progress?.todos) {
       parts.push(`Todo progress: ${JSON.stringify(progress.todos.counts)}${progress.todos.current ? ` — current: ${progress.todos.current}` : ""}.`);
     }

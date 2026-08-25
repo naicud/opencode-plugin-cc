@@ -3,6 +3,31 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.19.0] - 2026-08-25
+
+### Added
+- **Subagent-style live supervision without progressTokens**: `wait` and `waitAll` are now
+  hard-capped at one 60s activity slice when the caller supplies no `_meta.progressToken`
+  (explicit long `timeoutSec` values included). Every call returns a fresh snapshot — assistant
+  tail, reasoning tail, last tool calls, todo counts — plus `nextStep`, so chaining waits streams
+  a subagent-style transcript into the conversation. This also keeps every call under Claude
+  Code's ~2-minute MCP auto-background threshold (`CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`), which
+  previously made long blocking waits mute and invisible. With a progressToken the old blocking
+  behavior is unchanged (explicit `timeoutSec` honored, default 600s).
+- **Richer timeout context**: the PostToolUse delegation hook now includes the reasoning tail
+  and the most recent tool-call lines in its timeout note, alongside the existing assistant tail
+  and todo progress.
+- **Explicit-only agent triggers**: `agents/opencode-delegate.md` and
+  `skills/opencode-routing/SKILL.md` now activate ONLY on an explicit user ask (subagent,
+  delegation, OpenCode worker, fan-out) — never proactively. README gains a dedicated section
+  documenting how to invoke the `opencode-delegate` subagent (natural language,
+  `/opencode:delegate`, direct Task call) and what it costs in main-thread tokens (~400-450 per
+  supervision slice; all heavy work runs inside OpenCode).
+
+### Fixed
+- e2e fan-out supervision chains multiple slice-capped `waitAll` passes instead of assuming one
+  long blocking call reaches idle.
+
 ## [1.18.1] - 2026-08-24
 
 ### Fixed
