@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.20.1] - 2026-08-25
+
+### Fixed
+- **`opencode-delegate` spawns outside git repositories**: dropped the `isolation: worktree`
+  frontmatter flag — Claude Code requires a git repo to create agent worktrees, so spawning
+  the subagent in a non-repo cwd (e.g. `$HOME`) failed with "Cannot create agent worktree".
+  The subagent now runs in the caller's working directory like any standard subagent; the
+  OpenCode MCP tools already take an explicit absolute `cwd`, so no isolation is needed at
+  the supervisor layer. Agent prompt now instructs it to pass `cwd` on every tool call and
+  scope tasks with explicit in/out-of-scope paths instead of relying on worktree isolation.
+- `opencode-routing` skill updated to match: blast-radius scoping happens in the task text,
+  not via worktree isolation.
+
 ## [1.20.0] - 2026-08-25
 
 ### Added
